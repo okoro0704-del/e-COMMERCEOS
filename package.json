@@ -1,0 +1,30 @@
+{
+  "name": "ecommerceos",
+  "private": true,
+  "version": "0.1.0",
+  "description": "ECommerceOS — physical retail and e-commerce engine for LifeOS Business",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @ecommerceos/api",
+    "dev:api": "npm run dev -w @ecommerceos/api",
+    "build": "npm run build -w @lifeos/shared && npm run build -w @ecommerceos/shared && npm run build -w @ecommerceos/api",
+    "setup": "npm install && npm run build -w @lifeos/shared && npm run build -w @ecommerceos/shared && npm run db:generate && npm run db:push:dev",
+    "db:generate": "npm run db:generate -w @ecommerceos/api",
+    "db:push": "npm run db:push -w @ecommerceos/api",
+    "db:push:dev": "npm run db:push:dev -w @ecommerceos/api",
+    "db:seed": "npm run db:seed -w @ecommerceos/api",
+    "test": "npm run test -w @ecommerceos/api",
+    "test:e2e": "node --import tsx --test --test-concurrency=1 tests/e2e/portal-provisioning.test.ts && node --import tsx --test --test-concurrency=1 tests/e2e/order-lifecycle.test.ts",
+    "typecheck": "npm run build -w @lifeos/shared && npm run build -w @ecommerceos/shared && npm run typecheck -w @ecommerceos/api"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,17 @@
+node_modules/
+dist/
+build/
+.env
+.env.local
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.DS_Store
+Thumbs.db
+coverage/
+*.log
+.vite/
+*.tsbuildinfo
+apps/ecommerceos-api/prisma/dev.db
+apps/ecommerceos-api/media-private/
