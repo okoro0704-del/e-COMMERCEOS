@@ -11,7 +11,7 @@ const appEnv = resolveAppEnv();
 
 export const config = {
   env: appEnv,
-  port: Number(process.env.ECO_PORT ?? 8900),
+  port: Number(process.env.PORT ?? process.env.ECO_PORT ?? 8900),
   host: process.env.ECO_HOST ?? "0.0.0.0",
   databaseUrl: process.env.DATABASE_URL ?? (appEnv === "production" ? "" : "file:./dev.db"),
   sessionSecret: process.env.SESSION_SECRET ?? "dev-only-session-secret-change-me",
