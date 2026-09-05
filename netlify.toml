@@ -1,0 +1,13 @@
+[build]
+  base = "apps/ecommerceos-web"
+  command = "npm install && npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# SPA fallback: /admin, /product/*, /cart must serve the app, not Netlify's 404.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

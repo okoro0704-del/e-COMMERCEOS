@@ -22,7 +22,21 @@ export async function buildApp() {
   });
 
   await app.register(cors, {
-    origin: config.corsOrigins,
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true);
+      if (config.corsOrigins.includes("*") || config.corsOrigins.includes(origin)) {
+        return cb(null, true);
+      }
+      try {
+        const host = new URL(origin).hostname;
+        if (host.endsWith(".netlify.app") || host.endsWith(".lifeos.app") || host === "localhost") {
+          return cb(null, true);
+        }
+      } catch {
+        return cb(null, false);
+      }
+      return cb(null, false);
+    },
     credentials: true,
   });
 
