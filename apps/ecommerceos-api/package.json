@@ -8,8 +8,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "db:generate": "prisma generate",
-    "db:push": "prisma db push",
+    "db:generate": "node scripts/prisma-run.mjs generate",
+    "db:push": "node scripts/prisma-run.mjs db push",
     "db:push:dev": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
     "test": "node -e \"console.log('Use npm run test:e2e from the workspace root')\""
