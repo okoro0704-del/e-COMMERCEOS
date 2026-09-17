@@ -38,7 +38,7 @@ export async function registerMultiMerchantRoutes(app: FastifyInstance) {
     const body = z
       .object({
         displayName: z.string().min(1),
-        status: z.enum(["invited", "active", "suspended"]).optional(),
+        status: z.enum(["invited", "active", "suspended"]).default("invited"),
         sellerTenantId: z.string().optional(),
       })
       .parse(req.body);
