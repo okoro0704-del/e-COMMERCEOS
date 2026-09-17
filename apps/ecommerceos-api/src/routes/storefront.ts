@@ -12,6 +12,10 @@ export async function registerStorefrontRoutes(app: FastifyInstance) {
     const store = await prisma.storeConfig.findUnique({ where: { tenantId } });
     if (!store) return reply.code(404).send({ error: "not_found", message: "Store not found" });
     const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
+    const settings =
+      tenant?.settings && typeof tenant.settings === "object" && !Array.isArray(tenant.settings)
+        ? (tenant.settings as Record<string, unknown>)
+        : {};
     return {
       tenantId,
       storeName: store.storeName,
@@ -28,6 +32,12 @@ export async function registerStorefrontRoutes(app: FastifyInstance) {
         lng: store.pickupLng,
       },
       primaryColor: tenant?.primaryColor,
+      verticalId: typeof settings.verticalId === "string" ? settings.verticalId : tenant?.businessType ?? "retail",
+      operatingModel: typeof settings.operatingModel === "string" ? settings.operatingModel : "store",
+      hasPhysicalAddress: settings.hasPhysicalAddress !== false,
+      destinationOccupants: Array.isArray(settings.destinationOccupants) ? settings.destinationOccupants : [],
+      marketplaceSellers: Array.isArray(settings.marketplaceSellers) ? settings.marketplaceSellers : [],
+      wholesale: settings.wholesale ?? null,
     };
   });
 

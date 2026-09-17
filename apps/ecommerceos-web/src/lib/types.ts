@@ -12,6 +12,24 @@ export type Storefront = {
     country: string;
   };
   primaryColor?: string | null;
+  verticalId?: string;
+  operatingModel?: string;
+  hasPhysicalAddress?: boolean;
+  destinationOccupants?: Array<{
+    id: string;
+    unitCode: string;
+    displayName: string;
+    category?: string;
+    hours?: string;
+    referencedSubdomain?: string | null;
+  }>;
+  marketplaceSellers?: Array<{
+    id: string;
+    displayName: string;
+    status: string;
+    sellerTenantId?: string | null;
+  }>;
+  wholesale?: { minQuantityDefault?: number } | null;
 };
 
 export type Product = {

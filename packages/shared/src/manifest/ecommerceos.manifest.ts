@@ -21,6 +21,17 @@ export const MODULE_IDS = [
   "logistics_bridge",
   "billing",
   "staff_management",
+  "departments",
+  "promotions",
+  "directory",
+  "units",
+  "hours",
+  "events",
+  "offers",
+  "facilities",
+  "bulk_orders",
+  "wholesale_pricing",
+  "seller_participation",
 ] as const;
 
 export type ModuleId = (typeof MODULE_IDS)[number];
@@ -53,7 +64,17 @@ export type ECommerceOsDefaultSeed = {
   }>;
 };
 
-export const ECOMMERCEOS_DEFAULT_MODULES: ModuleId[] = [...MODULE_IDS];
+export const ECOMMERCEOS_DEFAULT_MODULES: ModuleId[] = [
+  "catalog",
+  "inventory",
+  "cart",
+  "orders",
+  "checkout",
+  "storefront",
+  "logistics_bridge",
+  "billing",
+  "staff_management",
+];
 
 export const ECOMMERCEOS_DEFAULT_SEED: ECommerceOsDefaultSeed = {
   roles: [
@@ -124,7 +145,7 @@ export const ECOMMERCEOS_MANIFEST: ECommerceOSManifest = {
   displayName: "ECommerceOS",
   version: "0.1.0",
   description:
-    "Physical retail and e-commerce engine — products, inventory, carts, escrow checkout, and LogisticsOS dispatch.",
+    "Commerce-native operating software — physical stores, online stores, supermarkets, centres, wholesalers, malls, and marketplaces.",
   distributorPrimitives: ["commerce", "identity", "billing", "messaging"],
   requiredPrimitives: ["identity", "messaging", "storage", "jobs", "distributor", "billing"],
   defaultModules: ECOMMERCEOS_DEFAULT_MODULES,

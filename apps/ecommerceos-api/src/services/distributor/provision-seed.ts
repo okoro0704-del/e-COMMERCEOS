@@ -1,10 +1,11 @@
-import { ECOMMERCEOS_DEFAULT_SEED, ECOMMERCEOS_MANIFEST } from "@ecommerceos/shared";
+import { ECOMMERCEOS_DEFAULT_SEED, ECOMMERCEOS_MANIFEST, ecommerceVerticalPreset } from "@ecommerceos/shared";
 import { prisma } from "../../db.js";
 
 export async function seedStoreDefaults(opts: {
   tenantId: string;
   displayName: string;
   subdomain: string;
+  verticalId?: string;
   pickup?: {
     addressLine1?: string;
     city?: string;
@@ -17,9 +18,10 @@ export async function seedStoreDefaults(opts: {
   defaultCurrency?: string;
   deliveryRadiusKm?: number;
 }) {
+  const preset = ecommerceVerticalPreset(opts.verticalId);
   const seed = ECOMMERCEOS_DEFAULT_SEED;
 
-  for (const category of seed.categories) {
+  for (const category of preset.seedCategories) {
     await prisma.productCategory.create({
       data: {
         tenantId: opts.tenantId,
@@ -50,5 +52,9 @@ export async function seedStoreDefaults(opts: {
     },
   });
 
-  return { categories: seed.categories.length, manifestVersion: ECOMMERCEOS_MANIFEST.version };
+  return {
+    categories: preset.seedCategories.length,
+    manifestVersion: ECOMMERCEOS_MANIFEST.version,
+    operatingModel: preset.operatingModel,
+  };
 }

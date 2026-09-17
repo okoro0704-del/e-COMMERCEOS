@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { ECOMMERCEOS_MANIFEST } from "@ecommerceos/shared";
+import { ECOMMERCEOS_MANIFEST, ecommerceVerticalPreset } from "@ecommerceos/shared";
 import { prisma } from "../../db.js";
 import { config } from "../../config.js";
 import { hashPassword, httpError } from "../../lib/crypto.js";
@@ -34,6 +34,8 @@ export type ProvisionTenantInput = {
   defaultCurrency?: string;
   deliveryRadiusKm?: number;
   walletPayoutAccount?: string;
+  verticalId?: string;
+  hasPhysicalAddress?: boolean;
 };
 
 function launchUrl(template: string, subdomain: string): string {
@@ -45,9 +47,10 @@ function launchUrl(template: string, subdomain: string): string {
  * Reads ECommerceOSManifest, seeds categories + store settings, registers primitive bindings.
  */
 export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
+  const preset = ecommerceVerticalPreset(input.verticalId);
   const slug = (input.slug ?? input.subdomain).toLowerCase().replace(/[^a-z0-9-]/g, "-");
   const seedMode = input.seed ?? "default";
-  const modules = input.modules?.length ? input.modules : [...ECOMMERCEOS_MANIFEST.defaultModules];
+  const modules = input.modules?.length ? input.modules : [...preset.modules];
 
   const existing = await prisma.tenant.findUnique({ where: { slug } });
   if (existing) {
@@ -89,7 +92,7 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
       organizationId: organization.id,
       slug,
       name: input.displayName,
-      businessType: ECOMMERCEOS_MANIFEST.brandDefaults.businessType,
+      businessType: preset.id,
       status: "active",
       lifeosBusinessId: input.trustId?.businessPublicId ?? input.distributorTenantId,
       logoUrl: input.brand?.logoUrl,
@@ -105,6 +108,15 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
         primitiveBindings,
         distributorDeploymentId: deploy.deploymentId,
         walletPayoutAccount: input.walletPayoutAccount ?? null,
+        verticalId: preset.id,
+        operatingModel: preset.operatingModel,
+        hasPhysicalAddress: input.hasPhysicalAddress ?? preset.hasPhysicalAddress,
+        destinationOccupants: (preset.seedOccupants ?? []).map((row, index) => ({
+          id: `occ_seed_${index + 1}`,
+          ...row,
+        })),
+        marketplaceSellers: [] as Array<{ id: string; displayName: string; status: string }>,
+        wholesale: preset.wholesale ?? null,
       },
     },
   });
@@ -133,6 +145,7 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
       tenantId: tenant.id,
       displayName: input.displayName,
       subdomain: slug,
+      verticalId: preset.id,
       pickup: input.pickup,
       defaultCurrency: input.defaultCurrency,
       deliveryRadiusKm: input.deliveryRadiusKm,
@@ -173,5 +186,7 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
       storefront: storefrontUrl,
       admin: adminConsoleUrl,
     },
+    verticalId: preset.id,
+    operatingModel: preset.operatingModel,
   };
 }

@@ -6,6 +6,7 @@ import { registerAuthRoutes } from "./routes/auth.js";
 import { registerProductRoutes } from "./routes/products.js";
 import { registerInventoryRoutes } from "./routes/inventory.js";
 import { registerStorefrontRoutes } from "./routes/storefront.js";
+import { registerMultiMerchantRoutes } from "./routes/multi-merchant.js";
 import { registerOrderRoutes } from "./routes/orders.js";
 import { config } from "./config.js";
 import { assertLifeOsPrimitivesReady, getLifeOsPrimitives } from "./services/lifeos/container.js";
@@ -18,6 +19,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await registerProductRoutes(app);
   await registerInventoryRoutes(app);
   await registerStorefrontRoutes(app);
+  await registerMultiMerchantRoutes(app);
   await registerOrderRoutes(app);
 
   app.get("/health", async () => ({

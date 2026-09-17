@@ -211,3 +211,39 @@ export function demoOrders() {
 export function demoProducts() {
   return DEMO_PRODUCTS;
 }
+
+export async function listDestinationOccupants(token?: string) {
+  return request<Storefront["destinationOccupants"]>("/v1/destination/occupants", {}, token);
+}
+
+export async function addDestinationOccupant(
+  token: string,
+  input: {
+    unitCode: string;
+    displayName: string;
+    category?: string;
+    hours?: string;
+    referencedSubdomain?: string;
+  },
+) {
+  return request<NonNullable<Storefront["destinationOccupants"]>>(
+    "/v1/destination/occupants",
+    { method: "POST", body: JSON.stringify(input) },
+    token,
+  );
+}
+
+export async function listMarketplaceSellers(token?: string) {
+  return request<Storefront["marketplaceSellers"]>("/v1/marketplace/sellers", {}, token);
+}
+
+export async function addMarketplaceSeller(
+  token: string,
+  input: { displayName: string; status?: "invited" | "active" | "suspended"; sellerTenantId?: string },
+) {
+  return request<NonNullable<Storefront["marketplaceSellers"]>>(
+    "/v1/marketplace/sellers",
+    { method: "POST", body: JSON.stringify(input) },
+    token,
+  );
+}

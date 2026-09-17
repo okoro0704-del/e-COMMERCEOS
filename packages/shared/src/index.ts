@@ -11,6 +11,19 @@ export {
 } from "./manifest/ecommerceos.manifest.js";
 
 export {
+  ECOMMERCEOS_VERTICAL_IDS,
+  ECOMMERCEOS_VERTICAL_PRESETS,
+  ECOMMERCE_VERTICAL_ID_ALIASES,
+  canonicalEcommerceVerticalId,
+  ecommerceVerticalPreset,
+  type EcommerceOsVerticalId,
+  type EcommerceOperatingModel,
+  type DestinationOccupant,
+  type MarketplaceSeller,
+  type EcommerceVerticalPreset,
+} from "./verticals.js";
+
+export {
   ORDER_STATUSES,
   ORDER_TRANSITIONS,
   LOGISTICS_STATUSES,

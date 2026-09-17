@@ -157,3 +157,66 @@ test("POST /internal/distributor/provision seeds store from ECommerceOSManifest"
   assert.equal(staff!.role, "owner");
   assert.equal(staff!.email, `owner@${subdomain}.example`);
 });
+
+test("supermarket and shopping centre presets seed distinct operating models", async () => {
+  const supermarketSub = `super-${Date.now().toString(36)}`;
+  const centreSub = `centre-${Date.now().toString(36)}`;
+  const supermarket = await app.inject({
+    method: "POST",
+    url: "/internal/distributor/provision",
+    headers: { authorization: "Bearer portal-e2e-token" },
+    payload: {
+      tenantId: `tid_${supermarketSub}`,
+      subdomain: supermarketSub,
+      displayName: "Harbor Fresh",
+      verticalId: "supermarket",
+      seed: "default",
+      adminStaff: {
+        email: `owner@${supermarketSub}.example`,
+        displayName: "Operator",
+        role: "owner",
+        password: "Password123!",
+      },
+    },
+  });
+  const centre = await app.inject({
+    method: "POST",
+    url: "/internal/distributor/provision",
+    headers: { authorization: "Bearer portal-e2e-token" },
+    payload: {
+      tenantId: `tid_${centreSub}`,
+      subdomain: centreSub,
+      displayName: "Marina Centre",
+      verticalId: "shopping_centre",
+      seed: "default",
+      adminStaff: {
+        email: `owner@${centreSub}.example`,
+        displayName: "Operator",
+        role: "owner",
+        password: "Password123!",
+      },
+    },
+  });
+  assert.equal(supermarket.statusCode, 201, supermarket.body);
+  assert.equal(centre.statusCode, 201, centre.body);
+  const superBody = supermarket.json() as { tenantId: string; verticalId: string; operatingModel: string };
+  const centreBody = centre.json() as { tenantId: string; verticalId: string; operatingModel: string };
+  assert.equal(superBody.verticalId, "supermarket");
+  assert.equal(superBody.operatingModel, "supermarket");
+  assert.equal(centreBody.verticalId, "shopping_centre");
+  assert.equal(centreBody.operatingModel, "destination");
+
+  const superCats = await prisma.productCategory.findMany({ where: { tenantId: superBody.tenantId } });
+  const centreCats = await prisma.productCategory.findMany({ where: { tenantId: centreBody.tenantId } });
+  assert.ok(superCats.some((c) => c.code === "PRODUCE"));
+  assert.ok(centreCats.some((c) => c.code === "FOOD"));
+  assert.ok(!centreCats.some((c) => c.code === "PRODUCE"));
+
+  const superTenant = await prisma.tenant.findUnique({ where: { id: superBody.tenantId } });
+  const centreTenant = await prisma.tenant.findUnique({ where: { id: centreBody.tenantId } });
+  const superSettings = superTenant?.settings as { operatingModel?: string; destinationOccupants?: unknown[] };
+  const centreSettings = centreTenant?.settings as { operatingModel?: string; destinationOccupants?: unknown[] };
+  assert.equal(superSettings.operatingModel, "supermarket");
+  assert.ok((centreSettings.destinationOccupants?.length ?? 0) >= 1);
+});
+

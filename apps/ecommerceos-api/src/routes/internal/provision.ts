@@ -82,6 +82,8 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
         defaultCurrency: z.string().optional(),
         deliveryRadiusKm: z.number().optional(),
         walletPayoutAccount: z.string().optional(),
+        verticalId: z.string().optional(),
+        hasPhysicalAddress: z.boolean().optional(),
       })
       .refine((v) => Boolean(v.distributorTenantId ?? v.tenantId), {
         message: "distributorTenantId or tenantId is required",
@@ -108,6 +110,8 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
         defaultCurrency: body.defaultCurrency,
         deliveryRadiusKm: body.deliveryRadiusKm,
         walletPayoutAccount: body.walletPayoutAccount,
+        verticalId: body.verticalId,
+        hasPhysicalAddress: body.hasPhysicalAddress,
       });
       return reply.code(201).send(result);
     } catch (err) {

@@ -1,14 +1,18 @@
 import { useState } from "react";
 import {
+  addDestinationOccupant,
+  addMarketplaceSeller,
   createProduct,
   demoOrders,
   demoProducts,
+  listDestinationOccupants,
+  listMarketplaceSellers,
   merchantCatalog,
   merchantLogin,
   merchantOrders,
 } from "../lib/api";
 import { formatMoney } from "../lib/money";
-import type { MerchantSession, Order, Product } from "../lib/types";
+import type { MerchantSession, Order, Product, Storefront } from "../lib/types";
 
 const SESSION_KEY = "eco_merchant_session";
 
@@ -25,12 +29,29 @@ export function AdminPage() {
   const [demo, setDemo] = useState(!session);
   const [products, setProducts] = useState<Product[]>(demoProducts());
   const [orders, setOrders] = useState<Order[]>(demoOrders());
+  const [occupants, setOccupants] = useState<NonNullable<Storefront["destinationOccupants"]>>([]);
+  const [sellers, setSellers] = useState<NonNullable<Storefront["marketplaceSellers"]>>([]);
+  const [unitForm, setUnitForm] = useState({
+    unitCode: "",
+    displayName: "",
+    category: "",
+    hours: "09:00–21:00",
+    referencedSubdomain: "",
+  });
+  const [sellerForm, setSellerForm] = useState({ displayName: "", sellerTenantId: "" });
   const [form, setForm] = useState({ title: "", description: "", sku: "", priceNaira: 25, stock: 10 });
 
   async function refresh(token: string) {
-    const [nextProducts, nextOrders] = await Promise.all([merchantCatalog(token), merchantOrders(token)]);
+    const [nextProducts, nextOrders, nextOccupants, nextSellers] = await Promise.all([
+      merchantCatalog(token),
+      merchantOrders(token),
+      listDestinationOccupants(token).catch(() => []),
+      listMarketplaceSellers(token).catch(() => []),
+    ]);
     setProducts(nextProducts);
     setOrders(nextOrders);
+    setOccupants(nextOccupants ?? []);
+    setSellers(nextSellers ?? []);
     setDemo(false);
   }
 
@@ -191,6 +212,122 @@ export function AdminPage() {
             ))}
           </tbody>
         </table>
+      </section>
+
+      <section className="card stack">
+        <h2>Destination directory</h2>
+        <p className="muted small">
+          Centres and malls reference occupant businesses. They do not copy another store’s catalog.
+        </p>
+        {session ? (
+          <form
+            className="stack"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              const next = await addDestinationOccupant(session.token, {
+                unitCode: unitForm.unitCode,
+                displayName: unitForm.displayName,
+                category: unitForm.category || undefined,
+                hours: unitForm.hours || undefined,
+                referencedSubdomain: unitForm.referencedSubdomain || undefined,
+              });
+              setOccupants(next);
+              setUnitForm({
+                unitCode: "",
+                displayName: "",
+                category: "",
+                hours: "09:00–21:00",
+                referencedSubdomain: "",
+              });
+            }}
+          >
+            <div className="row">
+              <label>
+                Unit
+                <input
+                  required
+                  value={unitForm.unitCode}
+                  onChange={(e) => setUnitForm({ ...unitForm, unitCode: e.target.value })}
+                />
+              </label>
+              <label>
+                Occupant name
+                <input
+                  required
+                  value={unitForm.displayName}
+                  onChange={(e) => setUnitForm({ ...unitForm, displayName: e.target.value })}
+                />
+              </label>
+            </div>
+            <label>
+              Linked store subdomain (optional)
+              <input
+                value={unitForm.referencedSubdomain}
+                onChange={(e) => setUnitForm({ ...unitForm, referencedSubdomain: e.target.value })}
+                placeholder="harbor-market"
+              />
+            </label>
+            <button className="btn secondary" type="submit">Add occupant</button>
+          </form>
+        ) : (
+          <p className="muted small">Sign in to add occupants.</p>
+        )}
+        <ul>
+          {occupants.map((unit) => (
+            <li key={unit.id}>
+              {unit.unitCode} — {unit.displayName}
+              {unit.referencedSubdomain ? ` → ${unit.referencedSubdomain}` : " (no linked app)"}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="card stack">
+        <h2>Marketplace sellers</h2>
+        <p className="muted small">
+          Sellers keep their own application identity. This roster does not copy product databases.
+        </p>
+        {session ? (
+          <form
+            className="stack"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              const next = await addMarketplaceSeller(session.token, {
+                displayName: sellerForm.displayName,
+                sellerTenantId: sellerForm.sellerTenantId || undefined,
+              });
+              setSellers(next);
+              setSellerForm({ displayName: "", sellerTenantId: "" });
+            }}
+          >
+            <label>
+              Seller name
+              <input
+                required
+                value={sellerForm.displayName}
+                onChange={(e) => setSellerForm({ ...sellerForm, displayName: e.target.value })}
+              />
+            </label>
+            <label>
+              Seller tenant id (optional)
+              <input
+                value={sellerForm.sellerTenantId}
+                onChange={(e) => setSellerForm({ ...sellerForm, sellerTenantId: e.target.value })}
+              />
+            </label>
+            <button className="btn secondary" type="submit">Invite seller</button>
+          </form>
+        ) : (
+          <p className="muted small">Sign in to invite sellers.</p>
+        )}
+        <ul>
+          {sellers.map((seller) => (
+            <li key={seller.id}>
+              {seller.displayName} · {seller.status}
+              {seller.sellerTenantId ? ` · ${seller.sellerTenantId}` : ""}
+            </li>
+          ))}
+        </ul>
       </section>
     </div>
   );
