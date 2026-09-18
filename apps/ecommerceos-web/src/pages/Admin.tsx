@@ -361,7 +361,7 @@ export function AdminPage() {
               });
               setSellers(await listMarketplaceSellers(session.token) ?? []);
               setCreatedNote(
-                `${created.store.applicationId} ready. Public: ${created.store.publicUrl}. Manage with ${created.adminEmail}`,
+                `${created.store.applicationId} ready. Public: ${created.store.publicUrl}. Manage with ${created.adminEmail}${created.temporaryAdminPassword ? ` / ${created.temporaryAdminPassword}` : ""}`,
               );
               setSellerForm({ displayName: "", subdomain: "", city: "Lagos" });
               const catalog = await loadMarketplaceAdminCatalog(session.token);
