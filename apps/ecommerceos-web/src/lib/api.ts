@@ -314,6 +314,36 @@ export async function loadMarketplaceAdminCatalog(token: string) {
   }>("/v1/marketplace/catalog", {}, token);
 }
 
-export async function updateProductTitle(token: string, productId: string, title: string) {
-  return request<Product>(`/v1/products/${productId}`, { method: "PATCH", body: JSON.stringify({ title }) }, token);
+export async function loadDigiPedia(token: string) {
+  return request<Record<string, unknown>>("/v1/admin/digipedia", {}, token);
+}
+
+export async function initializeDigiPedia(token: string) {
+  return request<Record<string, unknown>>("/v1/admin/digipedia/initialize", { method: "POST" }, token);
+}
+
+export async function saveDigiPediaDraft(token: string, expectedVersion: number, draft: unknown) {
+  return request<Record<string, unknown>>(
+    "/v1/admin/digipedia/draft",
+    { method: "PUT", body: JSON.stringify({ expectedVersion, draft }) },
+    token,
+  );
+}
+
+export async function publishDigiPedia(token: string, expectedVersion: number, draft: unknown) {
+  return request<Record<string, unknown>>(
+    "/v1/admin/digipedia/publish",
+    { method: "POST", body: JSON.stringify({ expectedVersion, draft }) },
+    token,
+  );
+}
+
+export async function previewDigiPedia(token: string) {
+  const headers = new Headers();
+  headers.set("Accept", "text/html");
+  headers.set("x-store-subdomain", storeSubdomain());
+  headers.set("Authorization", `Bearer ${token}`);
+  const res = await fetch(`${API_BASE}/v1/admin/digipedia/preview`, { headers });
+  if (!res.ok) throw new Error("Could not preview DigiPedia.");
+  return res.text();
 }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   addDestinationOccupant,
   createMarketplaceSellerStore,
@@ -6,12 +6,17 @@ import {
   demoOrders,
   demoProducts,
   enableOnlineMarketplace,
+  initializeDigiPedia,
+  loadDigiPedia,
   listDestinationOccupants,
   listMarketplaceSellers,
   loadMarketplaceAdminCatalog,
   merchantCatalog,
   merchantLogin,
   merchantOrders,
+  previewDigiPedia,
+  publishDigiPedia,
+  saveDigiPediaDraft,
   updateMarketplaceSellerStatus,
 } from "../lib/api";
 import { formatMoney } from "../lib/money";
@@ -124,6 +129,8 @@ export function AdminPage() {
       {demo ? (
         <div className="banner">Preview catalog and orders. Live data appears after a successful merchant login.</div>
       ) : null}
+
+      {session && !demo ? <DigiPediaAdmin token={session.token} /> : null}
 
       {session && !operator ? (
         <section className="card stack">
@@ -492,5 +499,219 @@ export function AdminPage() {
         </section>
       ) : null}
     </div>
+  );
+}
+
+type DigiPediaDraft = {
+  title: string;
+  summary: string;
+  sections: Array<{ sectionId: string; heading: string; body: string; sourceReferences: unknown[] }>;
+  sourceReferences: unknown[];
+  relatedEntityReferences: unknown[];
+};
+
+type DigiPediaManage = {
+  intro: string;
+  status: string;
+  published: boolean;
+  hasDraftChanges?: boolean;
+  draftVersion: number;
+  entity: { displayName: string; kind: string };
+  entry: { draft: DigiPediaDraft; publishedRevisionId: string | null } | null;
+  revisions?: Array<{ id: string; revisionNumber: number; publishedAt: string }>;
+};
+
+function DigiPediaAdmin({ token }: { token: string }) {
+  const [data, setData] = useState<DigiPediaManage | null>(null);
+  const [draft, setDraft] = useState<DigiPediaDraft | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState("");
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null);
+
+  useEffect(() => {
+    void loadDigiPedia(token)
+      .then((row) => {
+        const next = row as DigiPediaManage;
+        setData(next);
+        setDraft(next.entry ? structuredClone(next.entry.draft) : null);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "Could not load DigiPedia."));
+  }, [token]);
+
+  async function run(action: string, work: () => Promise<void>) {
+    setBusy(action);
+    setError(null);
+    setNotice(null);
+    try {
+      await work();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update DigiPedia.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <section className="card stack">
+      <h2>DigiPedia</h2>
+      {data ? <p className="muted small">{data.intro}</p> : null}
+      {data ? (
+        <p className="muted small">
+          {data.entity.displayName} ·{" "}
+          {data.status === "none"
+            ? "No entry yet"
+            : data.hasDraftChanges
+              ? "Published · Draft changes"
+              : data.published
+                ? "Published"
+                : "Draft"}
+        </p>
+      ) : null}
+      {error ? <p className="small" style={{ color: "var(--eco-danger)" }}>{error}</p> : null}
+      {notice ? <p className="muted small" role="status">{notice}</p> : null}
+      {data && !data.entry ? (
+        <button
+          className="btn"
+          type="button"
+          disabled={Boolean(busy)}
+          onClick={() =>
+            void run("initialize", async () => {
+              const next = (await initializeDigiPedia(token)) as DigiPediaManage;
+              setData(next);
+              setDraft(next.entry ? structuredClone(next.entry.draft) : null);
+            })
+          }
+        >
+          Start DigiPedia
+        </button>
+      ) : null}
+      {draft && data?.entry ? (
+        <>
+          <label>
+            Title
+            <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
+          </label>
+          <label>
+            Summary
+            <textarea rows={3} value={draft.summary} onChange={(e) => setDraft({ ...draft, summary: e.target.value })} />
+          </label>
+          {draft.sections.map((section, index) => (
+            <div className="stack" key={section.sectionId}>
+              <label>
+                {section.heading || "Section"}
+                <input
+                  value={section.heading}
+                  onChange={(e) => {
+                    const sections = [...draft.sections];
+                    sections[index] = { ...section, heading: e.target.value };
+                    setDraft({ ...draft, sections });
+                  }}
+                />
+              </label>
+              <label>
+                Body
+                <textarea
+                  rows={5}
+                  value={section.body}
+                  onChange={(e) => {
+                    const sections = [...draft.sections];
+                    sections[index] = { ...section, body: e.target.value };
+                    setDraft({ ...draft, sections });
+                  }}
+                />
+              </label>
+              <button
+                className="btn ghost"
+                type="button"
+                onClick={() => setDraft({ ...draft, sections: draft.sections.filter((_, i) => i !== index) })}
+              >
+                Remove section
+              </button>
+            </div>
+          ))}
+          <button
+            className="btn ghost"
+            type="button"
+            onClick={() =>
+              setDraft({
+                ...draft,
+                sections: [
+                  ...draft.sections,
+                  { sectionId: `section-${draft.sections.length + 1}`, heading: "About", body: "", sourceReferences: [] },
+                ],
+              })
+            }
+          >
+            Add section
+          </button>
+          <div className="row">
+            <button
+              className="btn"
+              type="button"
+              disabled={Boolean(busy)}
+              onClick={() =>
+                void run("save", async () => {
+                  const next = (await saveDigiPediaDraft(token, data.draftVersion, draft)) as DigiPediaManage;
+                  setData(next);
+                  setDraft(next.entry ? structuredClone(next.entry.draft) : draft);
+                  setNotice("Draft saved. The public page is unchanged.");
+                })
+              }
+            >
+              Save draft
+            </button>
+            <button
+              className="btn"
+              type="button"
+              disabled={Boolean(busy)}
+              onClick={() =>
+                void run("preview", async () => {
+                  setPreviewHtml(await previewDigiPedia(token));
+                })
+              }
+            >
+              Preview
+            </button>
+            <button
+              className="btn secondary"
+              type="button"
+              disabled={Boolean(busy)}
+              onClick={() =>
+                void run("publish", async () => {
+                  const next = (await publishDigiPedia(token, data.draftVersion, draft)) as DigiPediaManage;
+                  setData(next);
+                  setDraft(next.entry ? structuredClone(next.entry.draft) : draft);
+                  setNotice("Published. The public DigiPedia now shows this revision.");
+                })
+              }
+            >
+              Publish
+            </button>
+          </div>
+          {data.revisions?.length ? (
+            <div>
+              <h3>Revision history</h3>
+              {data.revisions.map((rev) => (
+                <p className="muted small" key={rev.id}>
+                  Revision {rev.revisionNumber} · {new Date(rev.publishedAt).toLocaleString()} · Published
+                </p>
+              ))}
+            </div>
+          ) : null}
+        </>
+      ) : null}
+      {previewHtml ? (
+        <div role="dialog" aria-labelledby="eco-digipedia-preview">
+          <div className="row">
+            <h3 id="eco-digipedia-preview">Preview</h3>
+            <button className="btn ghost" type="button" onClick={() => setPreviewHtml(null)}>
+              Close
+            </button>
+          </div>
+          <iframe title="DigiPedia draft preview" srcDoc={previewHtml} style={{ width: "100%", minHeight: "60vh", border: 0 }} />
+        </div>
+      ) : null}
+    </section>
   );
 }

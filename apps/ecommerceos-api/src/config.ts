@@ -47,6 +47,11 @@ export const config = {
     process.env.INTERNAL_PROVISION_TOKEN ??
     process.env.PRIMITIVES_SERVICE_TOKEN ??
     "dev-primitives-token",
+  digipediaUrl: (process.env.DIGIPEDIA_URL ?? "https://digiconomy-digipedia-production.up.railway.app").replace(
+    /\/$/,
+    "",
+  ),
+  digipediaManageKey: process.env.DIGIPEDIA_MANAGE_KEY ?? "",
   unpaidOrderTimeoutMs: Number(process.env.UNPAID_ORDER_TIMEOUT_MS ?? 30 * 60 * 1000),
   staffSessionTtlHours: 12,
   skipProductionAssert: process.env.ECO_SKIP_PRODUCTION_ASSERT === "true",

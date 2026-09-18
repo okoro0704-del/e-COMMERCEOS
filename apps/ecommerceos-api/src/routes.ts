@@ -8,6 +8,7 @@ import { registerInventoryRoutes } from "./routes/inventory.js";
 import { registerStorefrontRoutes } from "./routes/storefront.js";
 import { registerMultiMerchantRoutes } from "./routes/multi-merchant.js";
 import { registerOrderRoutes } from "./routes/orders.js";
+import { registerDigiPediaRoutes } from "./routes/digipedia.js";
 import { config } from "./config.js";
 import { assertLifeOsPrimitivesReady, getLifeOsPrimitives } from "./services/lifeos/container.js";
 
@@ -21,6 +22,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await registerStorefrontRoutes(app);
   await registerMultiMerchantRoutes(app);
   await registerOrderRoutes(app);
+  await registerDigiPediaRoutes(app);
 
   app.get("/health", async () => ({
     status: "ok" as const,
