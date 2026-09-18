@@ -409,3 +409,71 @@ test("Online Store can enable marketplace operator mode without a second vertica
   assert.notEqual(child.store.tenantId, store.tenantId);
   assert.notEqual(child.store.applicationId, store.tenantId);
 });
+
+test("public News publications project active products and drop unpublished ones", async () => {
+  const stamp = Date.now().toString(36);
+  const store = await provision({
+    subdomain: `news-${stamp}`,
+    displayName: "News Adapter Store",
+    verticalId: "delivery",
+    email: `owner@news-${stamp}.example`,
+  });
+  const token = await login(`owner@news-${stamp}.example`);
+  const created = await app.inject({
+    method: "POST",
+    url: "/v1/products",
+    headers: { authorization: `Bearer ${token}` },
+    payload: {
+      title: "Public store update",
+      description: "A legitimate EcommerceOS catalog update.",
+      variants: [{ sku: `N-${stamp}`, title: "Public store update", priceMinor: 1000, inventoryCount: 2 }],
+    },
+  });
+  assert.equal(created.statusCode, 201, created.body);
+  const product = created.json() as { id: string; status: string };
+
+  const publicNews = await app.inject({
+    method: "GET",
+    url: "/v1/storefront/publications",
+    headers: { "x-store-subdomain": store.slug },
+  });
+  assert.equal(publicNews.statusCode, 200, publicNews.body);
+  const body = publicNews.json() as {
+    publications: Array<{
+      publicationId: string;
+      publisherEntityId: string;
+      subjectEntityIds: string[];
+      publishedAt: string;
+      status: string;
+      audience: string;
+      title: string | null;
+      canonicalUrl: string;
+    }>;
+  };
+  assert.equal(body.publications.length, 1);
+  assert.equal(body.publications[0]?.publicationId, `ecommerceos:product:${product.id}`);
+  assert.equal(body.publications[0]?.publisherEntityId, store.slug);
+  assert.deepEqual(body.publications[0]?.subjectEntityIds, [store.slug]);
+  assert.equal(body.publications[0]?.status, "published");
+  assert.equal(body.publications[0]?.audience, "public");
+  assert.equal(body.publications[0]?.title, "Public store update");
+  assert.match(body.publications[0]?.publishedAt ?? "", /^20\d{2}-/);
+  assert.equal(body.publications[0]?.canonicalUrl, `https://${store.slug}.getlifeos.app/product/${product.id}`);
+  assert.equal(JSON.stringify(body).includes("inventoryCount"), false);
+  assert.equal(JSON.stringify(body).includes("password"), false);
+
+  const hide = await app.inject({
+    method: "PATCH",
+    url: `/v1/products/${product.id}`,
+    headers: { authorization: `Bearer ${token}` },
+    payload: { status: "archived" },
+  });
+  assert.equal(hide.statusCode, 200, hide.body);
+  const after = await app.inject({
+    method: "GET",
+    url: "/v1/storefront/publications",
+    headers: { "x-store-subdomain": store.slug },
+  });
+  assert.equal((after.json() as { publications: unknown[] }).publications.length, 0);
+});
+

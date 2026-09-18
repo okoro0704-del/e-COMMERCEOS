@@ -3,6 +3,7 @@ import { z } from "zod";
 import { isOnlineMarketplaceOperator } from "@ecommerceos/shared";
 import { requireBuyer, requireTenant } from "../lib/auth.js";
 import { listCategories, getProduct, listProducts } from "../services/catalog.js";
+import { listPublicPublications } from "../services/publications.js";
 import { addCartItem, getCart, removeCartItem, updateCartItem } from "../services/cart.js";
 import {
   projectMarketplaceCatalog,
@@ -88,6 +89,12 @@ export async function registerStorefrontRoutes(app: FastifyInstance) {
     const tenantId = await requireTenant(req, reply);
     if (!tenantId) return;
     return listCategories(tenantId);
+  });
+
+  app.get("/v1/storefront/publications", async (req, reply) => {
+    const tenantId = await requireTenant(req, reply);
+    if (!tenantId) return;
+    return { publications: await listPublicPublications(tenantId) };
   });
 
   app.get("/v1/storefront/products", async (req, reply) => {

@@ -241,6 +241,7 @@ function serializeProduct(product: {
   description: string;
   status: string;
   images: unknown;
+  createdAt?: Date;
   category: { id: string; code: string; name: string } | null;
   variants: Array<{
     id: string;
@@ -265,6 +266,7 @@ function serializeProduct(product: {
     description: product.description,
     status: product.status,
     images: asImages(product.images),
+    createdAt: "createdAt" in product && product.createdAt instanceof Date ? product.createdAt.toISOString() : undefined,
     category: product.category,
     variants: product.variants.map((v) => ({
       ...v,
