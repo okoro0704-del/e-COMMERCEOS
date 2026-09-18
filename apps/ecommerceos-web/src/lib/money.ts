@@ -13,6 +13,9 @@ export function storeSubdomain() {
   if (fromQuery) return fromQuery;
 
   const host = window.location.hostname.toLowerCase();
+  if (host.endsWith(".getlifeos.app")) {
+    return host.replace(".getlifeos.app", "").split(".")[0] ?? "demo";
+  }
   if (host.endsWith(".lifeos.app")) {
     return host.replace(".lifeos.app", "").split(".")[0] ?? "demo";
   }

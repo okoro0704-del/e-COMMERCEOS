@@ -45,13 +45,42 @@ export type DestinationOccupant = {
   referencedSubdomain?: string | null;
 };
 
+export const MARKETPLACE_MEMBERSHIP_STATUSES = [
+  "invited",
+  "active",
+  "suspended",
+  "removed",
+] as const;
+
+export type MarketplaceMembershipStatus = (typeof MARKETPLACE_MEMBERSHIP_STATUSES)[number];
+
+/**
+ * Marketplace membership — a relationship, not a copied store or catalogue.
+ * Seller catalogue remains canonical on the referenced Online Store.
+ */
 export type MarketplaceSeller = {
   id: string;
   displayName: string;
-  status: "invited" | "active" | "suspended";
-  /** Reference to the seller's own application/tenant — not a copied catalog. */
+  status: MarketplaceMembershipStatus;
+  /** EcommerceOS tenant that owns the seller catalogue. */
   sellerTenantId?: string | null;
+  /** Canonical application identity (PortalInstall id when present). */
+  sellerApplicationId?: string | null;
+  sellerSubdomain?: string | null;
+  publicUrl?: string | null;
+  adminUrl?: string | null;
+  createdByMarketplace?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 };
+
+export function isOnlineMarketplaceOperator(settings: Record<string, unknown> | null | undefined): boolean {
+  if (!settings) return false;
+  if (settings.operatingModel === "marketplace") return true;
+  if (settings.onlineMarketplace === true) return true;
+  if (settings.verticalId === "marketplace") return true;
+  return false;
+}
 
 export type EcommerceVerticalPreset = {
   id: EcommerceOsVerticalId;

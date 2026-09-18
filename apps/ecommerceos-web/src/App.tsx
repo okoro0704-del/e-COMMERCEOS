@@ -1,6 +1,7 @@
 import { Link, Route, Routes } from "react-router-dom";
 import { AdminPage } from "./pages/Admin";
 import { CartPage } from "./pages/Cart";
+import { MarketplaceProductPage } from "./pages/MarketplaceProduct";
 import { NotFoundPage } from "./pages/NotFound";
 import { OrderPage } from "./pages/Order";
 import { ProductPage } from "./pages/Product";
@@ -12,7 +13,7 @@ export function App() {
       <header className="topbar">
         <Link className="brand" to="/">ECommerceOS</Link>
         <nav className="nav">
-          <Link to="/">Storefront</Link>
+          <Link to="/">Shop</Link>
           <Link to="/cart">Cart</Link>
           <Link to="/admin">Admin</Link>
         </nav>
@@ -22,6 +23,7 @@ export function App() {
           <Route path="/" element={<StorefrontPage />} />
           <Route path="/storefront" element={<StorefrontPage />} />
           <Route path="/product/:id" element={<ProductPage />} />
+          <Route path="/m/:storeRef/product/:productId" element={<MarketplaceProductPage />} />
           <Route path="/cart" element={<CartPage />} />
           <Route path="/checkout" element={<CartPage />} />
           <Route path="/order/:id" element={<OrderPage />} />
@@ -29,7 +31,7 @@ export function App() {
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </main>
-      <footer className="footer">LifeOS Business · Physical retail · LogisticsOS dispatch</footer>
+      <footer className="footer">EcommerceOS · Online Store · Online Marketplace</footer>
     </div>
   );
 }

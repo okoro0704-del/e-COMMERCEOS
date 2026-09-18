@@ -1,8 +1,15 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { isOnlineMarketplaceOperator } from "@ecommerceos/shared";
 import { requireBuyer, requireTenant } from "../lib/auth.js";
 import { listCategories, getProduct, listProducts } from "../services/catalog.js";
 import { addCartItem, getCart, removeCartItem, updateCartItem } from "../services/cart.js";
+import {
+  projectMarketplaceCatalog,
+  projectMarketplaceProduct,
+  projectMarketplaceSearch,
+  projectMarketplaceStores,
+} from "../services/multi-merchant.js";
 import { prisma } from "../db.js";
 
 export async function registerStorefrontRoutes(app: FastifyInstance) {
@@ -36,9 +43,45 @@ export async function registerStorefrontRoutes(app: FastifyInstance) {
       operatingModel: typeof settings.operatingModel === "string" ? settings.operatingModel : "store",
       hasPhysicalAddress: settings.hasPhysicalAddress !== false,
       destinationOccupants: Array.isArray(settings.destinationOccupants) ? settings.destinationOccupants : [],
-      marketplaceSellers: Array.isArray(settings.marketplaceSellers) ? settings.marketplaceSellers : [],
+      marketplaceSellers: Array.isArray(settings.marketplaceSellers)
+        ? (settings.marketplaceSellers as Array<Record<string, unknown>>).map((seller) => ({
+            id: seller.id,
+            displayName: seller.displayName,
+            status: seller.status,
+            sellerSubdomain: seller.sellerSubdomain ?? null,
+            publicUrl: seller.publicUrl ?? null,
+          }))
+        : [],
+      onlineMarketplace: isOnlineMarketplaceOperator(settings),
       wholesale: settings.wholesale ?? null,
     };
+  });
+
+  app.get("/v1/storefront/marketplace/stores", async (req, reply) => {
+    const tenantId = await requireTenant(req, reply);
+    if (!tenantId) return;
+    return projectMarketplaceStores(tenantId);
+  });
+
+  app.get("/v1/storefront/marketplace/products", async (req, reply) => {
+    const tenantId = await requireTenant(req, reply);
+    if (!tenantId) return;
+    const query = z.object({ q: z.string().optional() }).parse(req.query);
+    return projectMarketplaceCatalog(tenantId, query.q);
+  });
+
+  app.get("/v1/storefront/marketplace/search", async (req, reply) => {
+    const tenantId = await requireTenant(req, reply);
+    if (!tenantId) return;
+    const query = z.object({ q: z.string().min(1) }).parse(req.query);
+    return projectMarketplaceSearch(tenantId, query.q);
+  });
+
+  app.get("/v1/storefront/marketplace/products/:storeRef/:productId", async (req, reply) => {
+    const tenantId = await requireTenant(req, reply);
+    if (!tenantId) return;
+    const { storeRef, productId } = z.object({ storeRef: z.string(), productId: z.string() }).parse(req.params);
+    return projectMarketplaceProduct(tenantId, storeRef, productId);
   });
 
   app.get("/v1/storefront/categories", async (req, reply) => {

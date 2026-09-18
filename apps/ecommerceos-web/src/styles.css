@@ -193,3 +193,60 @@ input, textarea, select {
   place-items: center;
   text-align: center;
 }
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0 0 1.25rem;
+}
+
+.tab {
+  border: 1px solid var(--eco-border);
+  background: var(--eco-surface);
+  color: var(--eco-text);
+  border-radius: 999px;
+  padding: 0.45rem 0.9rem;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.tab.active {
+  background: var(--eco-accent);
+  color: var(--eco-on-accent);
+  border-color: var(--eco-accent);
+}
+
+.marketplace-search {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-top: 1.25rem;
+}
+
+.marketplace-search input {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+@media (max-width: 900px) {
+  .page { width: min(1120px, calc(100% - 1.25rem)); padding: 1.25rem 0 3rem; }
+  .hero { padding: 1.75rem 1.25rem; }
+}
+
+@media (max-width: 720px) {
+  .topbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .nav { flex-wrap: wrap; }
+  .grid { grid-template-columns: 1fr; }
+  .hero { padding: 1.4rem 1rem; }
+  .row { flex-direction: column; align-items: stretch; }
+  .table { font-size: 0.85rem; }
+}

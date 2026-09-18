@@ -15,6 +15,7 @@ export type Storefront = {
   verticalId?: string;
   operatingModel?: string;
   hasPhysicalAddress?: boolean;
+  onlineMarketplace?: boolean;
   destinationOccupants?: Array<{
     id: string;
     unitCode: string;
@@ -28,6 +29,11 @@ export type Storefront = {
     displayName: string;
     status: string;
     sellerTenantId?: string | null;
+    sellerApplicationId?: string | null;
+    sellerSubdomain?: string | null;
+    publicUrl?: string | null;
+    adminUrl?: string | null;
+    createdByMarketplace?: boolean;
   }>;
   wholesale?: { minQuantityDefault?: number } | null;
 };
@@ -49,6 +55,66 @@ export type Product = {
     status: string;
     images: string[];
   }>;
+};
+
+export type MarketplaceStore = {
+  storeRef: string;
+  name: string;
+  subdomain: string;
+  publicUrl: string;
+  status: string;
+};
+
+export type MarketplaceProjectedProduct = {
+  presentationId: string;
+  storeRef: string;
+  sellerName: string;
+  sellerPublicUrl: string | null;
+  title: string;
+  description: string;
+  images: string[];
+  category: { code: string; name: string } | null;
+  priceMinor: number | null;
+  currency: string;
+  available: number | null;
+};
+
+export type MarketplaceProductDetail = {
+  presentationId: string;
+  storeRef: string;
+  title: string;
+  description: string;
+  images: string[];
+  category: { name: string } | null;
+  priceMinor: number | null;
+  currency: string;
+  available: number | null;
+  seller: {
+    name: string;
+    publicUrl: string | null;
+    subdomain: string | null;
+  };
+};
+
+export type MarketplaceSearch = {
+  query: string;
+  stores: MarketplaceStore[];
+  products: MarketplaceProjectedProduct[];
+  categories: Array<{ code: string; name: string }>;
+};
+
+export type MarketplaceCreatedStore = {
+  membership: NonNullable<Storefront["marketplaceSellers"]>[number];
+  store: {
+    applicationId: string;
+    tenantId: string;
+    slug: string;
+    verticalId: string;
+    publicUrl: string;
+    adminUrl: string;
+  };
+  temporaryAdminPassword?: string;
+  adminEmail?: string;
 };
 
 export type Cart = {

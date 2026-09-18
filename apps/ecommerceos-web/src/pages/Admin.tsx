@@ -1,18 +1,21 @@
 import { useState } from "react";
 import {
   addDestinationOccupant,
-  addMarketplaceSeller,
+  createMarketplaceSellerStore,
   createProduct,
   demoOrders,
   demoProducts,
+  enableOnlineMarketplace,
   listDestinationOccupants,
   listMarketplaceSellers,
+  loadMarketplaceAdminCatalog,
   merchantCatalog,
   merchantLogin,
   merchantOrders,
+  updateMarketplaceSellerStatus,
 } from "../lib/api";
 import { formatMoney } from "../lib/money";
-import type { MerchantSession, Order, Product, Storefront } from "../lib/types";
+import type { MarketplaceProjectedProduct, MerchantSession, Order, Product, Storefront } from "../lib/types";
 
 const SESSION_KEY = "eco_merchant_session";
 
@@ -38,13 +41,17 @@ export function AdminPage() {
     hours: "09:00–21:00",
     referencedSubdomain: "",
   });
-  const [sellerForm, setSellerForm] = useState({ displayName: "", sellerTenantId: "" });
+  const [sellerForm, setSellerForm] = useState({ displayName: "", subdomain: "", city: "Lagos" });
   const [form, setForm] = useState({ title: "", description: "", sku: "", priceNaira: 25, stock: 10 });
+  const [operator, setOperator] = useState(false);
+  const [projected, setProjected] = useState<MarketplaceProjectedProduct[]>([]);
+  const [createdNote, setCreatedNote] = useState<string | null>(null);
+  const [adminTab, setAdminTab] = useState<"overview" | "stores" | "catalogue">("overview");
 
   async function refresh(token: string) {
     const [nextProducts, nextOrders, nextOccupants, nextSellers] = await Promise.all([
-      merchantCatalog(token),
-      merchantOrders(token),
+      merchantCatalog(token).catch(() => []),
+      merchantOrders(token).catch(() => []),
       listDestinationOccupants(token).catch(() => []),
       listMarketplaceSellers(token).catch(() => []),
     ]);
@@ -52,6 +59,14 @@ export function AdminPage() {
     setOrders(nextOrders);
     setOccupants(nextOccupants ?? []);
     setSellers(nextSellers ?? []);
+    try {
+      const catalog = await loadMarketplaceAdminCatalog(token);
+      setProjected(catalog.products);
+      setOperator(true);
+    } catch {
+      setOperator(false);
+      setProjected([]);
+    }
     setDemo(false);
   }
 
@@ -110,6 +125,50 @@ export function AdminPage() {
         <div className="banner">Preview catalog and orders. Live data appears after a successful merchant login.</div>
       ) : null}
 
+      {session && !operator ? (
+        <section className="card stack">
+          <h2>Online Marketplace</h2>
+          <p className="muted small">
+            Enable operator mode on this application. Marketplace is a capability, not a separately purchased vertical.
+          </p>
+          <button
+            className="btn secondary"
+            type="button"
+            onClick={async () => {
+              await enableOnlineMarketplace(session.token);
+              await refresh(session.token);
+            }}
+          >
+            Enable Online Marketplace
+          </button>
+        </section>
+      ) : null}
+
+      {operator ? (
+        <section className="card stack">
+          <h2>Online Marketplace admin</h2>
+          <nav className="tabs" aria-label="Operator sections">
+            <button className={adminTab === "overview" ? "tab active" : "tab"} type="button" onClick={() => setAdminTab("overview")}>
+              Overview
+            </button>
+            <button className={adminTab === "stores" ? "tab active" : "tab"} type="button" onClick={() => setAdminTab("stores")}>
+              Stores
+            </button>
+            <button className={adminTab === "catalogue" ? "tab active" : "tab"} type="button" onClick={() => setAdminTab("catalogue")}>
+              Catalogue
+            </button>
+          </nav>
+          {adminTab === "overview" ? (
+            <p className="muted small">
+              {sellers.filter((s) => s.status === "active").length} participating stores. Seller catalogues stay on each
+              Online Store. Connect existing store is same-organization only.
+            </p>
+          ) : null}
+        </section>
+      ) : null}
+
+      {!operator ? (
+      <>
       <section className="card stack">
         <h2>Add product</h2>
         <form
@@ -281,54 +340,157 @@ export function AdminPage() {
           ))}
         </ul>
       </section>
+      </>
+      ) : null}
 
-      <section className="card stack">
-        <h2>Marketplace sellers</h2>
-        <p className="muted small">
-          Sellers keep their own application identity. This roster does not copy product databases.
-        </p>
-        {session ? (
+      {operator && session && (adminTab === "stores" || adminTab === "overview") ? (
+        <section className="card stack">
+          <h2>Add seller / Create Online Store</h2>
+          <p className="muted small">
+            Provisions a real Online Store through the existing distributor path. The seller keeps that application.
+          </p>
           <form
             className="stack"
             onSubmit={async (e) => {
               e.preventDefault();
-              const next = await addMarketplaceSeller(session.token, {
+              setError(null);
+              const created = await createMarketplaceSellerStore(session.token, {
                 displayName: sellerForm.displayName,
-                sellerTenantId: sellerForm.sellerTenantId || undefined,
+                subdomain: sellerForm.subdomain || undefined,
+                city: sellerForm.city || undefined,
               });
-              setSellers(next);
-              setSellerForm({ displayName: "", sellerTenantId: "" });
+              setSellers(await listMarketplaceSellers(session.token) ?? []);
+              setCreatedNote(
+                `${created.store.applicationId} ready. Public: ${created.store.publicUrl}. Manage with ${created.adminEmail}`,
+              );
+              setSellerForm({ displayName: "", subdomain: "", city: "Lagos" });
+              const catalog = await loadMarketplaceAdminCatalog(session.token);
+              setProjected(catalog.products);
             }}
           >
             <label>
-              Seller name
+              Business / store name
               <input
                 required
                 value={sellerForm.displayName}
                 onChange={(e) => setSellerForm({ ...sellerForm, displayName: e.target.value })}
               />
             </label>
-            <label>
-              Seller tenant id (optional)
-              <input
-                value={sellerForm.sellerTenantId}
-                onChange={(e) => setSellerForm({ ...sellerForm, sellerTenantId: e.target.value })}
-              />
-            </label>
-            <button className="btn secondary" type="submit">Invite seller</button>
+            <div className="row">
+              <label>
+                Subdomain (optional)
+                <input
+                  value={sellerForm.subdomain}
+                  onChange={(e) => setSellerForm({ ...sellerForm, subdomain: e.target.value })}
+                  placeholder="ade-fashion"
+                />
+              </label>
+              <label>
+                City
+                <input
+                  value={sellerForm.city}
+                  onChange={(e) => setSellerForm({ ...sellerForm, city: e.target.value })}
+                />
+              </label>
+            </div>
+            <button className="btn" type="submit">Create Online Store</button>
           </form>
-        ) : (
-          <p className="muted small">Sign in to invite sellers.</p>
-        )}
-        <ul>
-          {sellers.map((seller) => (
-            <li key={seller.id}>
-              {seller.displayName} · {seller.status}
-              {seller.sellerTenantId ? ` · ${seller.sellerTenantId}` : ""}
-            </li>
-          ))}
-        </ul>
-      </section>
+          {createdNote ? <p className="small">{createdNote}</p> : null}
+          <p className="muted small">
+            Connect existing store: same organization only. Cross-organization attach is not implemented.
+          </p>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Store</th>
+                  <th>Status</th>
+                  <th>Relationship</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sellers.map((seller) => (
+                  <tr key={seller.id}>
+                    <td>
+                      <strong>{seller.displayName}</strong>
+                      <div className="muted small">{seller.sellerSubdomain ?? "invited"}</div>
+                    </td>
+                    <td className="status">{seller.status}</td>
+                    <td>
+                      <div className="row">
+                        {seller.publicUrl ? (
+                          <a className="btn ghost" href={seller.publicUrl} target="_blank" rel="noreferrer">
+                            View Store
+                          </a>
+                        ) : null}
+                        {seller.createdByMarketplace && seller.adminUrl ? (
+                          <a className="btn ghost" href={seller.adminUrl} target="_blank" rel="noreferrer">
+                            Manage Store
+                          </a>
+                        ) : null}
+                        {seller.status === "active" ? (
+                          <button
+                            className="btn secondary"
+                            type="button"
+                            onClick={async () => {
+                              await updateMarketplaceSellerStatus(session.token, seller.id, "suspended");
+                              setSellers(await listMarketplaceSellers(session.token) ?? []);
+                            }}
+                          >
+                            Suspend
+                          </button>
+                        ) : seller.status === "suspended" ? (
+                          <button
+                            className="btn secondary"
+                            type="button"
+                            onClick={async () => {
+                              await updateMarketplaceSellerStatus(session.token, seller.id, "active");
+                              setSellers(await listMarketplaceSellers(session.token) ?? []);
+                            }}
+                          >
+                            Reactivate
+                          </button>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
+
+      {operator && adminTab === "catalogue" ? (
+        <section className="card stack">
+          <h2>Marketplace catalogue projection</h2>
+          <p className="muted small">Live view of participating Online Store catalogues. No marketplace product copies.</p>
+          {projected.length ? (
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>Seller</th>
+                    <th>Price</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {projected.map((item) => (
+                    <tr key={item.presentationId}>
+                      <td>{item.title}</td>
+                      <td>{item.sellerName}</td>
+                      <td>{item.priceMinor != null ? formatMoney(item.priceMinor, item.currency) : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="empty">No participating catalogue items yet.</p>
+          )}
+        </section>
+      ) : null}
     </div>
   );
 }

@@ -1,6 +1,17 @@
 import { DEMO_ORDERS, DEMO_PRODUCTS, DEMO_STORE, emptyCart } from "./demo";
 import { buyerToken, storeSubdomain } from "./money";
-import type { Cart, MerchantSession, Order, Product, Storefront } from "./types";
+import type {
+  Cart,
+  MarketplaceCreatedStore,
+  MarketplaceProductDetail,
+  MarketplaceProjectedProduct,
+  MarketplaceSearch,
+  MarketplaceStore,
+  MerchantSession,
+  Order,
+  Product,
+  Storefront,
+} from "./types";
 
 const API_BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 
@@ -239,11 +250,70 @@ export async function listMarketplaceSellers(token?: string) {
 
 export async function addMarketplaceSeller(
   token: string,
-  input: { displayName: string; status?: "invited" | "active" | "suspended"; sellerTenantId?: string },
+  input: { displayName: string; status?: "invited" | "active" | "suspended" | "removed"; sellerTenantId?: string },
 ) {
   return request<NonNullable<Storefront["marketplaceSellers"]>>(
     "/v1/marketplace/sellers",
     { method: "POST", body: JSON.stringify(input) },
     token,
   );
+}
+
+export async function enableOnlineMarketplace(token: string) {
+  return request("/v1/marketplace/enable", { method: "POST" }, token);
+}
+
+export async function createMarketplaceSellerStore(
+  token: string,
+  input: { displayName: string; subdomain?: string; city?: string; country?: string },
+) {
+  return request<MarketplaceCreatedStore>(
+    "/v1/marketplace/sellers/stores",
+    { method: "POST", body: JSON.stringify(input) },
+    token,
+  );
+}
+
+export async function updateMarketplaceSellerStatus(
+  token: string,
+  sellerId: string,
+  status: "invited" | "active" | "suspended" | "removed",
+) {
+  return request<{
+    membership: NonNullable<Storefront["marketplaceSellers"]>[number];
+    storeDeleted: boolean;
+    storeStillExists: boolean;
+    catalogueCount: number;
+  }>(`/v1/marketplace/sellers/${sellerId}`, { method: "PATCH", body: JSON.stringify({ status }) }, token);
+}
+
+export async function loadMarketplaceStores() {
+  return request<MarketplaceStore[]>("/v1/storefront/marketplace/stores");
+}
+
+export async function loadMarketplaceCatalog(q?: string) {
+  const suffix = q ? `?q=${encodeURIComponent(q)}` : "";
+  return request<{ products: MarketplaceProjectedProduct[]; categories: Array<{ code: string; name: string }> }>(
+    `/v1/storefront/marketplace/products${suffix}`,
+  );
+}
+
+export async function searchMarketplace(q: string) {
+  return request<MarketplaceSearch>(`/v1/storefront/marketplace/search?q=${encodeURIComponent(q)}`);
+}
+
+export async function loadMarketplaceProduct(storeRef: string, productId: string) {
+  return request<MarketplaceProductDetail>(`/v1/storefront/marketplace/products/${storeRef}/${productId}`);
+}
+
+export async function loadMarketplaceAdminCatalog(token: string) {
+  return request<{
+    stores: MarketplaceStore[];
+    products: MarketplaceProjectedProduct[];
+    categories: Array<{ code: string; name: string }>;
+  }>("/v1/marketplace/catalog", {}, token);
+}
+
+export async function updateProductTitle(token: string, productId: string, title: string) {
+  return request<Product>(`/v1/products/${productId}`, { method: "PATCH", body: JSON.stringify({ title }) }, token);
 }

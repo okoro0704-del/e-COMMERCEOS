@@ -16,10 +16,13 @@ export {
   ECOMMERCE_VERTICAL_ID_ALIASES,
   canonicalEcommerceVerticalId,
   ecommerceVerticalPreset,
+  MARKETPLACE_MEMBERSHIP_STATUSES,
+  isOnlineMarketplaceOperator,
   type EcommerceOsVerticalId,
   type EcommerceOperatingModel,
   type DestinationOccupant,
   type MarketplaceSeller,
+  type MarketplaceMembershipStatus,
   type EcommerceVerticalPreset,
 } from "./verticals.js";
 

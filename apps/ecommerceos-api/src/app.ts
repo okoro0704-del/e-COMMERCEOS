@@ -29,7 +29,13 @@ export async function buildApp() {
       }
       try {
         const host = new URL(origin).hostname;
-        if (host.endsWith(".netlify.app") || host.endsWith(".lifeos.app") || host === "localhost") {
+        if (
+          host.endsWith(".netlify.app") ||
+          host.endsWith(".getlifeos.app") ||
+          host.endsWith(".lifeos.app") ||
+          host === "localhost" ||
+          host === "getlifeos.app"
+        ) {
           return cb(null, true);
         }
       } catch {

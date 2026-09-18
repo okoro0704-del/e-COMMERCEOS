@@ -38,9 +38,15 @@ export const config = {
     process.env.PRIMITIVES_SERVICE_TOKEN ??
     "dev-primitives-token",
   storefrontLaunchUrlTemplate:
-    process.env.STOREFRONT_LAUNCH_URL ?? "https://{subdomain}.lifeos.app",
+    process.env.STOREFRONT_LAUNCH_URL ?? "https://{subdomain}.getlifeos.app",
   adminLaunchUrlTemplate:
-    process.env.ADMIN_LAUNCH_URL ?? "https://{subdomain}.lifeos.app/admin",
+    process.env.ADMIN_LAUNCH_URL ?? "https://{subdomain}.getlifeos.app/admin",
+  portalApiUrl: (process.env.PORTAL_API_URL ?? "").replace(/\/$/, ""),
+  portalInternalToken:
+    process.env.PORTAL_INTERNAL_TOKEN ??
+    process.env.INTERNAL_PROVISION_TOKEN ??
+    process.env.PRIMITIVES_SERVICE_TOKEN ??
+    "dev-primitives-token",
   unpaidOrderTimeoutMs: Number(process.env.UNPAID_ORDER_TIMEOUT_MS ?? 30 * 60 * 1000),
   staffSessionTtlHours: 12,
   skipProductionAssert: process.env.ECO_SKIP_PRODUCTION_ASSERT === "true",
