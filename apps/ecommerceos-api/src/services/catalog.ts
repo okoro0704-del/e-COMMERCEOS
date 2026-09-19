@@ -221,7 +221,7 @@ export async function uploadProductImage(opts: {
     contentType: opts.contentType ?? "image/jpeg",
   });
   const url = ref.url ?? driveUrl(ref.namespace, ref.key);
-  await prisma.mediaAsset.create({
+  const asset = await prisma.mediaAsset.create({
     data: {
       tenantId: opts.tenantId,
       namespace: ref.namespace,
@@ -231,7 +231,7 @@ export async function uploadProductImage(opts: {
       url,
     },
   });
-  return { url, key: ref.key, namespace: ref.namespace };
+  return { id: asset.id, url, key: ref.key, namespace: ref.namespace, contentType: ref.contentType };
 }
 
 function serializeProduct(product: {

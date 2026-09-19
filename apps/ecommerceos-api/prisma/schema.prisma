@@ -47,6 +47,7 @@ model Tenant {
   orders       Order[]
   inventoryMovements InventoryMovement[]
   mediaAssets  MediaAsset[]
+  businessPublications BusinessPublication[]
   auditLogs    AuditLog[]
 
   @@index([organizationId])
@@ -335,6 +336,28 @@ model MediaAsset {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
+}
+
+/// Merchant photo/video/post publications surfaced on LifeOS public feed and storefront.
+model BusinessPublication {
+  id               String    @id @default(cuid())
+  tenantId         String
+  type             String
+  title            String    @default("")
+  caption          String    @default("")
+  status           String    @default("draft")
+  audience         String    @default("public")
+  relatedProductId String?
+  mediaAssetIds    Json
+  publishedAt      DateTime?
+  scheduledAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([status, audience, publishedAt])
 }
 
 model AuditLog {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   addDestinationOccupant,
+  createBusinessPublication,
   createMarketplaceSellerStore,
   createProduct,
   demoOrders,
@@ -18,6 +19,7 @@ import {
   publishDigiPedia,
   saveDigiPediaDraft,
   updateMarketplaceSellerStatus,
+  uploadMedia,
 } from "../lib/api";
 import { formatMoney } from "../lib/money";
 import type { MarketplaceProjectedProduct, MerchantSession, Order, Product, Storefront } from "../lib/types";
@@ -48,6 +50,15 @@ export function AdminPage() {
   });
   const [sellerForm, setSellerForm] = useState({ displayName: "", subdomain: "", city: "Lagos" });
   const [form, setForm] = useState({ title: "", description: "", sku: "", priceNaira: 25, stock: 10 });
+  const [pubForm, setPubForm] = useState<{
+    type: "PHOTO" | "VIDEO";
+    title: string;
+    caption: string;
+    relatedProductId: string;
+    file: File | null;
+  }>({ type: "PHOTO", title: "", caption: "", relatedProductId: "", file: null });
+  const [pubBusy, setPubBusy] = useState(false);
+  const [pubNote, setPubNote] = useState<string | null>(null);
   const [operator, setOperator] = useState(false);
   const [projected, setProjected] = useState<MarketplaceProjectedProduct[]>([]);
   const [createdNote, setCreatedNote] = useState<string | null>(null);
@@ -226,6 +237,109 @@ export function AdminPage() {
             </label>
           </div>
           <button className="btn secondary" type="submit">Save product</button>
+        </form>
+      </section>
+
+      <section className="card stack">
+        <h2>Publish photo / video</h2>
+        <p className="muted small">Share store media on your public catalogue and LifeOS feed.</p>
+        <form
+          className="stack"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            if (!session) {
+              setError("Sign in against a live API to publish media.");
+              return;
+            }
+            if (!pubForm.file) {
+              setError("Choose a photo or video file to upload.");
+              return;
+            }
+            setPubBusy(true);
+            setError(null);
+            setPubNote(null);
+            try {
+              const buffer = await pubForm.file.arrayBuffer();
+              const bytes = new Uint8Array(buffer);
+              let binary = "";
+              for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]!);
+              const bodyBase64 = btoa(binary);
+              const contentType =
+                pubForm.file.type ||
+                (pubForm.type === "VIDEO" ? "video/mp4" : "image/jpeg");
+              const uploaded = await uploadMedia(session.token, {
+                filename: pubForm.file.name || `${pubForm.type.toLowerCase()}-${Date.now()}`,
+                contentType,
+                bodyBase64,
+                productId: pubForm.relatedProductId || undefined,
+              });
+              const created = await createBusinessPublication(session.token, {
+                type: pubForm.type,
+                title: pubForm.title || undefined,
+                caption: pubForm.caption || undefined,
+                mediaAssetIds: [uploaded.id],
+                relatedProductId: pubForm.relatedProductId || null,
+                status: "published",
+              });
+              setPubNote(`Published · /p/${String(created.id ?? "")}`);
+              setPubForm({ type: "PHOTO", title: "", caption: "", relatedProductId: "", file: null });
+            } catch (err) {
+              setError(err instanceof Error ? err.message : "Could not publish media");
+            } finally {
+              setPubBusy(false);
+            }
+          }}
+        >
+          <label>
+            Type
+            <select
+              value={pubForm.type}
+              onChange={(e) =>
+                setPubForm({ ...pubForm, type: e.target.value === "VIDEO" ? "VIDEO" : "PHOTO" })
+              }
+            >
+              <option value="PHOTO">PHOTO</option>
+              <option value="VIDEO">VIDEO</option>
+            </select>
+          </label>
+          <label>
+            Title
+            <input value={pubForm.title} onChange={(e) => setPubForm({ ...pubForm, title: e.target.value })} />
+          </label>
+          <label>
+            Caption
+            <textarea
+              value={pubForm.caption}
+              onChange={(e) => setPubForm({ ...pubForm, caption: e.target.value })}
+            />
+          </label>
+          <label>
+            Related product (optional)
+            <select
+              value={pubForm.relatedProductId}
+              onChange={(e) => setPubForm({ ...pubForm, relatedProductId: e.target.value })}
+            >
+              <option value="">None</option>
+              {products.map((product) => (
+                <option key={product.id} value={product.id}>
+                  {product.title}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            File
+            <input
+              type="file"
+              accept={pubForm.type === "VIDEO" ? "video/*" : "image/*"}
+              required
+              onChange={(e) => setPubForm({ ...pubForm, file: e.target.files?.[0] ?? null })}
+            />
+          </label>
+          {pubNote ? <p className="muted small" role="status">{pubNote}</p> : null}
+          <button className="btn" type="submit" disabled={pubBusy}>
+            {pubBusy ? "Publishing…" : "Publish"}
+          </button>
         </form>
       </section>
 

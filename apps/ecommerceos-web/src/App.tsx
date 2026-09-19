@@ -5,6 +5,7 @@ import { MarketplaceProductPage } from "./pages/MarketplaceProduct";
 import { NotFoundPage } from "./pages/NotFound";
 import { OrderPage } from "./pages/Order";
 import { ProductPage } from "./pages/Product";
+import { PublicationPage } from "./pages/Publication";
 import { StorefrontPage } from "./pages/Storefront";
 
 export function App() {
@@ -23,6 +24,7 @@ export function App() {
           <Route path="/" element={<StorefrontPage />} />
           <Route path="/storefront" element={<StorefrontPage />} />
           <Route path="/product/:id" element={<ProductPage />} />
+          <Route path="/p/:id" element={<PublicationPage />} />
           <Route path="/m/:storeRef/product/:productId" element={<MarketplaceProductPage />} />
           <Route path="/cart" element={<CartPage />} />
           <Route path="/checkout" element={<CartPage />} />

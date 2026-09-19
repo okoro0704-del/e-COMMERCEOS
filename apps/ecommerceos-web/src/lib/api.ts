@@ -32,6 +32,77 @@ async function request<T>(path: string, init: RequestInit = {}, auth?: string): 
   return data;
 }
 
+/** Public LifeOS/catalogue endpoints — no store subdomain header. */
+async function fetchPublic<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers);
+  headers.set("Accept", "application/json");
+  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  const data = (await res.json().catch(() => ({}))) as T & { message?: string; error?: string };
+  if (!res.ok) {
+    throw new Error(data.message || data.error || `Request failed (${res.status})`);
+  }
+  return data;
+}
+
+export type PublicBusinessPublication = {
+  id: string;
+  type: string;
+  title: string;
+  caption: string;
+  storeName: string;
+  slug: string;
+  publishedAt: string | null;
+  relatedProductId: string | null;
+  media: Array<{ assetId: string; href: string; contentType: string | null }>;
+  canonicalSourceUrl: string;
+  storeUrl: string;
+  productUrl: string | null;
+};
+
+export async function loadPublicPublication(id: string): Promise<PublicBusinessPublication> {
+  return fetchPublic<PublicBusinessPublication>(`/v1/public/publications/${encodeURIComponent(id)}`);
+}
+
+export async function uploadMedia(
+  token: string,
+  input: { filename: string; contentType: string; bodyBase64: string; productId?: string },
+): Promise<{ id: string; url: string; key: string; namespace: string; contentType?: string | null }> {
+  return request(
+    "/v1/media/upload",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        filename: input.filename,
+        contentType: input.contentType,
+        body: input.bodyBase64,
+        encoding: "base64",
+        productId: input.productId,
+      }),
+    },
+    token,
+  );
+}
+
+export async function createBusinessPublication(
+  token: string,
+  input: {
+    type: "PHOTO" | "VIDEO" | "POST";
+    title?: string;
+    caption?: string;
+    mediaAssetIds: string[];
+    relatedProductId?: string | null;
+    status?: "draft" | "published";
+  },
+) {
+  return request<Record<string, unknown>>(
+    "/v1/publications",
+    { method: "POST", body: JSON.stringify(input) },
+    token,
+  );
+}
+
 export async function loadStorefront(): Promise<{ store: Storefront; products: Product[]; mode: ApiMode }> {
   try {
     const [store, products] = await Promise.all([
