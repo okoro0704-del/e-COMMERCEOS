@@ -23,7 +23,12 @@ process.env.PRIMITIVES_MODE = "local";
 process.env.LOGISTICS_MODE = "local";
 process.env.ECO_SKIP_PRODUCTION_ASSERT = "true";
 
-const OPERATOR_PASSWORD = "Password123!";
+const OPERATOR_PASSWORD = "E2e-Store-Passw0rd-2026!";
+
+/** Test accounts use owner@{store-handle}.example, so the domain names the store. */
+function storeOf(email: string) {
+  return email.split("@")[1]!.split(".")[0]!;
+}
 
 let app: FastifyInstance;
 let prisma: PrismaClient;
@@ -98,10 +103,23 @@ async function login(email: string, password = OPERATOR_PASSWORD) {
   const res = await app.inject({
     method: "POST",
     url: "/v1/auth/merchant/login",
-    payload: { email, password },
+    payload: { email, password, tenantSlug: storeOf(email) },
   });
   assert.equal(res.statusCode, 200, res.body);
-  return (res.json() as { token: string }).token;
+  const body = res.json() as { token: string; mustChangePassword: boolean };
+  if (!body.mustChangePassword) return body.token;
+  // Operator-issued passwords are temporary: everything but the password routes is closed until replaced.
+  const blocked = await app.inject({ method: "GET", url: "/v1/products", headers: { authorization: `Bearer ${body.token}` } });
+  assert.equal(blocked.statusCode, 403, blocked.body);
+  assert.equal(blocked.json().error, "password_change_required");
+  const changed = await app.inject({
+    method: "POST",
+    url: "/v1/auth/merchant/password",
+    headers: { authorization: `Bearer ${body.token}` },
+    payload: { currentPassword: password, newPassword: "Seller-Own-Passw0rd-2026" },
+  });
+  assert.equal(changed.statusCode, 200, changed.body);
+  return body.token;
 }
 
 test("marketplace ID remains a compatibility operating model, not a deleted vertical", () => {
@@ -314,9 +332,9 @@ test("marketplace operator creates three independent Online Stores and projects 
     displayName: "Other Marketplace",
     verticalId: "marketplace",
     organizationSlug: `mp-out-org-${stamp}`,
-    email: `ops@out-${stamp}.example`,
+    email: `ops@mp-out-${stamp}.example`,
   });
-  const outsiderToken = await login(`ops@out-${stamp}.example`);
+  const outsiderToken = await login(`ops@mp-out-${stamp}.example`);
   const attach = await app.inject({
     method: "POST",
     url: "/v1/marketplace/sellers/connect",

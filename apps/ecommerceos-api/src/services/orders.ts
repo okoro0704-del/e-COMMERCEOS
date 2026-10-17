@@ -241,14 +241,20 @@ const FULFILMENT_BY_STATUS: Record<string, OrderFulfilmentStatus> = {
  * dispatched order is never mistaken for a paid one. Orders "paid" through the
  * old local stub carry a `local_` payment id and are reported as not paid.
  */
-export function presentOrder<T extends { status: string; escrowPaymentId: string | null }>(order: T) {
+export function presentOrder<T extends { status: string; escrowPaymentId: string | null; buyerTrustId: string }>(
+  order: T,
+  opts: { forMerchant?: boolean } = {},
+) {
   const paymentStatus: OrderPaymentStatus = !order.escrowPaymentId
     ? "unpaid"
     : order.escrowPaymentId.startsWith("local_")
       ? "simulated_not_paid"
       : "provider_reported";
+  // Older rows hold the buyer's bearer token as buyerTrustId; merchants never see it.
+  const { buyerTrustId, ...rest } = order;
   return {
-    ...order,
+    ...rest,
+    ...(opts.forMerchant ? {} : { buyerTrustId }),
     paymentStatus,
     // No provider webhook verification exists in this build, so nothing counts as verified paid.
     paymentVerified: false,

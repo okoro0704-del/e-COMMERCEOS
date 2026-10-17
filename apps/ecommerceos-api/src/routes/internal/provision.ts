@@ -58,9 +58,11 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
             email: z.string().email(),
             displayName: z.string().min(1),
             role: z.string().optional(),
-            password: z.string().min(8).optional(),
+            password: z.string().min(8).max(1024).optional(),
+            temporaryPassword: z.boolean().optional(),
           })
           .optional(),
+        owner: z.object({ subject: z.string().min(3).max(200) }).optional(),
         organization: z
           .object({
             slug: z.string().optional(),
@@ -104,6 +106,7 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
         seed: body.seed,
         trustId: body.trustId,
         adminStaff: body.adminStaff,
+        owner: body.owner,
         organization: body.organization,
         manifestVersion: body.manifestVersion,
         pickup: body.pickup,
@@ -113,7 +116,7 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
         verticalId: body.verticalId,
         hasPhysicalAddress: body.hasPhysicalAddress,
       });
-      return reply.code(201).send(result);
+      return reply.code("replayed" in result ? 200 : 201).send(result);
     } catch (err) {
       const e = err as { statusCode?: number; code?: string; message?: string };
       return reply.code(e.statusCode ?? 500).send({

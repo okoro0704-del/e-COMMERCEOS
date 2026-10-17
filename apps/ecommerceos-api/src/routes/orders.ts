@@ -37,22 +37,30 @@ export async function registerOrderRoutes(app: FastifyInstance) {
 
   app.get("/v1/orders", async (req, reply) => {
     const merchant = await resolveMerchantAuth(req);
+    if (merchant?.mustChangePassword) {
+      return reply.code(403).send({ error: "password_change_required", message: "Set a new password to continue." });
+    }
     if (merchant) {
       const query = z.object({ status: z.string().optional() }).parse(req.query);
-      return (await listOrders({ tenantId: merchant.tenantId, status: query.status })).map(presentOrder);
+      return (await listOrders({ tenantId: merchant.tenantId, status: query.status })).map((o) =>
+        presentOrder(o, { forMerchant: true }),
+      );
     }
     const buyer = await requireBuyer(req, reply);
     if (!buyer) return;
     const query = z.object({ status: z.string().optional() }).parse(req.query);
     return (await listOrders({ tenantId: buyer.tenantId, buyerTrustId: buyer.trustId, status: query.status })).map(
-      presentOrder,
+      (o) => presentOrder(o),
     );
   });
 
   app.get("/v1/orders/:id", async (req, reply) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const merchant = await resolveMerchantAuth(req);
-    if (merchant) return presentOrder(await getOrder(merchant.tenantId, id));
+    if (merchant?.mustChangePassword) {
+      return reply.code(403).send({ error: "password_change_required", message: "Set a new password to continue." });
+    }
+    if (merchant) return presentOrder(await getOrder(merchant.tenantId, id), { forMerchant: true });
     const buyer = await requireBuyer(req, reply);
     if (!buyer) return;
     const order = await getOrder(buyer.tenantId, id);

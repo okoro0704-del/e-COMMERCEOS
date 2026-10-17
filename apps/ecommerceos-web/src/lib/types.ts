@@ -152,6 +152,8 @@ export type Order = {
 
 export type MerchantSession = {
   token: string;
+  passwordSet?: boolean;
+  mustChangePassword?: boolean;
   staff: {
     id: string;
     displayName: string;

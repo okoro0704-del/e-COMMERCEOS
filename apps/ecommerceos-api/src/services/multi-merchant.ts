@@ -8,6 +8,7 @@ import {
 import { prisma } from "../db.js";
 import { config } from "../config.js";
 import { httpError } from "../lib/crypto.js";
+import { passwordProblem } from "../lib/password-policy.js";
 import { listCategories, listProducts, getProduct } from "./catalog.js";
 import { provisionEcommerceTenant } from "./distributor/provision-tenant.js";
 
@@ -229,7 +230,9 @@ export async function createSellerOnlineStore(
   const applicationId = `ins_${randomUUID().replace(/-/g, "")}`;
   const organization = marketplace.organization;
   const adminPassword = input.adminPassword ?? `Tmp-${randomBytes(6).toString("hex")}!`;
-  const adminEmail = input.adminEmail ?? `owner@${subdomain}.commerce.local`;
+  const adminEmail = (input.adminEmail ?? `owner@${subdomain}.commerce.local`).trim().toLowerCase();
+  const weak = passwordProblem(adminPassword, adminEmail);
+  if (weak) throw httpError(400, "weak_password", weak);
 
   const provisioned = await provisionEcommerceTenant({
     distributorTenantId: applicationId,
@@ -246,6 +249,8 @@ export async function createSellerOnlineStore(
       displayName: input.displayName,
       role: "owner",
       password: adminPassword,
+      // The marketplace operator chose it, so the seller must replace it at first sign-in.
+      temporaryPassword: true,
     },
     pickup: {
       city: input.city,

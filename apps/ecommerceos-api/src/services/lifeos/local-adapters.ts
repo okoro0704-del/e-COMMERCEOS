@@ -16,7 +16,7 @@ import type {
   TrustIdSessionProof,
   WalletBalanceSummary,
 } from "@lifeos/shared";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 export class LocalTrustIdAdapter implements ITrustIdProvider {
   readonly primitiveId = "trust-id" as const;
@@ -24,10 +24,14 @@ export class LocalTrustIdAdapter implements ITrustIdProvider {
   async health() {
     return { ok: true, service: "trustid-local" };
   }
+  /**
+   * Guest identity derived one-way from the bearer token, so stored order and cart
+   * owner ids never reveal a credential that could be replayed.
+   */
   async resolveSession(sessionToken: string): Promise<TrustIdSessionProof | null> {
     if (!sessionToken) return null;
-    const trustId = sessionToken.startsWith("TD-") ? sessionToken : `TD-${sessionToken}`;
-    return { trustId, sessionToken, trustTier: 1, verified: true };
+    const trustId = `TD-guest-${createHash("sha256").update(sessionToken).digest("hex").slice(0, 32)}`;
+    return { trustId, trustTier: 1, verified: true };
   }
 }
 

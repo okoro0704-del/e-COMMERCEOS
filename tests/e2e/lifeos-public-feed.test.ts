@@ -22,7 +22,12 @@ process.env.LOGISTICS_MODE = "local";
 process.env.ECO_SKIP_PRODUCTION_ASSERT = "true";
 process.env.ECOMMERCEOS_PUBLIC_API_URL = "https://api.example.test";
 
-const PASSWORD = "Password123!";
+const PASSWORD = "E2e-Store-Passw0rd-2026!";
+
+/** Test accounts use owner@{store-handle}.example, so the domain names the store. */
+function storeOf(email: string) {
+  return email.split("@")[1]!.split(".")[0]!;
+}
 
 let app: FastifyInstance;
 let prisma: PrismaClient;
@@ -84,7 +89,7 @@ async function login(email: string) {
   const res = await app.inject({
     method: "POST",
     url: "/v1/auth/merchant/login",
-    payload: { email, password: PASSWORD },
+    payload: { email, password: PASSWORD, tenantSlug: storeOf(email) },
   });
   assert.equal(res.statusCode, 200, res.body);
   return (res.json() as { token: string }).token;

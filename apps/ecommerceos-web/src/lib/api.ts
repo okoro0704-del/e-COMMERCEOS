@@ -325,11 +325,27 @@ export async function placeOrderAndPay(input: {
   }
 }
 
+/** The store handle comes from this admin address (x-store-subdomain), so accounts are store-scoped. */
 export async function merchantLogin(email: string, password: string): Promise<MerchantSession> {
   return request<MerchantSession>("/v1/auth/merchant/login", {
     method: "POST",
     body: JSON.stringify({ email, password }),
   });
+}
+
+export async function exchangeAdminHandoff(code: string): Promise<MerchantSession & { resetGrant: string }> {
+  return request("/v1/auth/merchant/handoff/exchange", { method: "POST", body: JSON.stringify({ code }) });
+}
+
+export async function merchantLogout(token: string): Promise<void> {
+  await request("/v1/auth/merchant/logout", { method: "POST" }, token).catch(() => undefined);
+}
+
+export async function changeMerchantPassword(
+  token: string,
+  input: { newPassword: string; currentPassword?: string; resetGrant?: string },
+): Promise<{ ok: true; passwordSet: boolean; mustChangePassword: boolean }> {
+  return request("/v1/auth/merchant/password", { method: "POST", body: JSON.stringify(input) }, token);
 }
 
 export async function merchantCatalog(token: string): Promise<Product[]> {

@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { registerInternalProvisionRoutes } from "./routes/internal/provision.js";
 import { registerLogisticsWebhookRoutes } from "./routes/internal/logistics-webhook.js";
 import { registerInternalJobRoutes } from "./routes/internal/jobs.js";
+import { registerAdminHandoffRoutes } from "./routes/internal/admin-handoff.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerProductRoutes } from "./routes/products.js";
 import { registerInventoryRoutes } from "./routes/inventory.js";
@@ -19,6 +20,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await registerInternalProvisionRoutes(app);
   await registerLogisticsWebhookRoutes(app);
   await registerInternalJobRoutes(app);
+  await registerAdminHandoffRoutes(app);
   await registerAuthRoutes(app);
   await registerProductRoutes(app);
   await registerInventoryRoutes(app);
