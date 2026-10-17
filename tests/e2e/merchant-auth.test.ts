@@ -307,6 +307,57 @@ test("a legacy store is claimed once by its owner email, then only by that Porta
   assert.equal(takeover.statusCode, 403, takeover.body);
 });
 
+test("concurrent claims on an unclaimed store bind exactly one owner, and the binding holds", async () => {
+  const claimFor = (sub: string, ownerSubject: string, ownerEmail: string) =>
+    app.inject({
+      method: "POST",
+      url: "/internal/ecommerceos/admin-handoff",
+      headers: SERVICE,
+      payload: { subdomain: sub, ownerSubject, ownerEmail },
+    });
+  const ownerOf = async (sub: string) =>
+    (await prisma.staffMember.findFirst({ where: { tenant: { slug: sub }, role: "owner" } }))?.trustId;
+
+  // Distinct Portal identities race for the same unclaimed store: one wins, the rest are refused.
+  const sub = handle("claim-race");
+  const email = `owner@${sub}.example`;
+  assert.equal((await provision({ subdomain: sub, email, password: LEAKED_PASSWORD })).statusCode, 201);
+  const claimants = Array.from({ length: 8 }, (_, i) => `local:claimant-${i}`);
+  const results = await Promise.all(claimants.map((subject) => claimFor(sub, subject, email)));
+  const winners = claimants.filter((_, i) => results[i]!.statusCode === 201);
+  assert.equal(winners.length, 1, `statuses ${results.map((r) => r.statusCode).join(",")}`);
+  for (const res of results.filter((r) => r.statusCode !== 201)) {
+    assert.equal(res.statusCode, 403, res.body);
+    assert.equal(res.json().error, "owner_mismatch");
+  }
+  const winner = winners[0]!;
+  assert.equal(await ownerOf(sub), winner, "the bound owner is the identity that won");
+
+  // Later attempts by losers, including a different email case, never overwrite the owner.
+  for (const subject of claimants.filter((c) => c !== winner)) {
+    assert.equal((await claimFor(sub, subject, email.toUpperCase())).statusCode, 403);
+  }
+  assert.equal(await ownerOf(sub), winner);
+
+  // The winner can open the store again (a replay of its own claim), and the binding is unchanged.
+  const again = await claimFor(sub, winner, email);
+  assert.equal(again.statusCode, 201, again.body);
+  const code = decodeURIComponent((again.json().url as string).split("#handoff=")[1]!);
+  const exchanged = await app.inject({ method: "POST", url: "/v1/auth/merchant/handoff/exchange", payload: { code } });
+  assert.equal(exchanged.statusCode, 200, exchanged.body);
+  assert.equal(await ownerOf(sub), winner);
+  const tenantId = (await prisma.tenant.findUnique({ where: { slug: sub } }))!.id;
+  assert.equal(await prisma.auditLog.count({ where: { tenantId, action: "staff.owner_bound" } }), 1, "bound exactly once");
+
+  // The same identity double-submitting its first claim is one claim, not a conflict.
+  const twin = handle("claim-twin");
+  const twinEmail = `owner@${twin}.example`;
+  assert.equal((await provision({ subdomain: twin, email: twinEmail, password: LEAKED_PASSWORD })).statusCode, 201);
+  const both = await Promise.all([claimFor(twin, "local:twin", twinEmail), claimFor(twin, "local:twin", twinEmail)]);
+  assert.deepEqual(both.map((r) => r.statusCode), [201, 201], both.map((r) => r.body).join(" | "));
+  assert.equal(await ownerOf(twin), "local:twin");
+});
+
 test("provisioning replays for the same owner and refuses anyone else", async () => {
   const sub = handle("idem");
   const email = `owner@${sub}.example`;

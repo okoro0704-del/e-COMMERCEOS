@@ -182,6 +182,45 @@ export async function changeStaffPassword(opts: {
  * owner account to the Portal identity on first use (legacy stores match by owner email)
  * and returns a single-use code the browser exchanges for a store admin session.
  */
+/**
+ * Binds a not-yet-claimed store owner to the Portal identity that proved the owner email.
+ * The read above is only a snapshot, so the claim itself is conditional at write time: the row is
+ * updated only while it still has no identity, and exactly one claimant can change it. A repeat by
+ * the identity that already won is the same claim. Any other claimant is refused and never
+ * overwrites the bound owner.
+ */
+async function claimLegacyOwner(tenantId: string, staffId: string, ownerSubject: string) {
+  const claimed = await prisma.staffMember.updateMany({
+    where: { id: staffId, tenantId, trustId: null },
+    data: { trustId: ownerSubject },
+  });
+  if (claimed.count !== 1) {
+    const current = await prisma.staffMember.findUnique({ where: { id: staffId } });
+    if (current?.trustId !== ownerSubject) {
+      throw httpError(403, "owner_mismatch", "This Portal account does not own this store.");
+    }
+    return current;
+  }
+  // One identity per store: a concurrent claim on another unbound owner row loses here and is undone.
+  const rival = await prisma.staffMember.findFirst({
+    where: { tenantId, trustId: { not: null }, NOT: { trustId: ownerSubject } },
+  });
+  if (rival) {
+    await prisma.staffMember.updateMany({ where: { id: staffId, trustId: ownerSubject }, data: { trustId: null } });
+    throw httpError(403, "owner_mismatch", "This Portal account does not own this store.");
+  }
+  const staff = await prisma.staffMember.findUniqueOrThrow({ where: { id: staffId } });
+  await writeAudit({
+    tenantId,
+    actorKind: "system",
+    action: "staff.owner_bound",
+    resource: "staff",
+    resourceId: staff.id,
+    metadata: { via: "portal_handoff_email_match" },
+  });
+  return staff;
+}
+
 export async function createAdminHandoff(opts: {
   subdomain: string;
   tenantId?: string;
@@ -202,15 +241,7 @@ export async function createAdminHandoff(opts: {
     const email = opts.ownerEmail ? normalizeEmail(opts.ownerEmail) : null;
     const legacy = !alreadyBound && email ? owners.find((s) => normalizeEmail(s.email) === email) : undefined;
     if (!legacy) throw httpError(403, "owner_mismatch", "This Portal account does not own this store.");
-    staff = await prisma.staffMember.update({ where: { id: legacy.id }, data: { trustId: opts.ownerSubject } });
-    await writeAudit({
-      tenantId: tenant.id,
-      actorKind: "system",
-      action: "staff.owner_bound",
-      resource: "staff",
-      resourceId: staff.id,
-      metadata: { via: "portal_handoff_email_match" },
-    });
+    staff = await claimLegacyOwner(tenant.id, legacy.id, opts.ownerSubject);
   }
 
   const code = randomBytes(32).toString("base64url");
