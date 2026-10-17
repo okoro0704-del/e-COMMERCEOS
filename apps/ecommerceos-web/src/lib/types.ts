@@ -36,6 +36,7 @@ export type Storefront = {
     createdByMarketplace?: boolean;
   }>;
   wholesale?: { minQuantityDefault?: number } | null;
+  checkout?: { onlinePayment: boolean };
 };
 
 export type Product = {
@@ -143,6 +144,10 @@ export type Order = {
   currency: string;
   createdAt: string;
   logisticsJobId?: string | null;
+  paymentExpiresAt?: string;
+  paymentStatus?: "unpaid" | "simulated_not_paid" | "provider_reported";
+  paymentVerified?: boolean;
+  fulfilmentStatus?: string;
 };
 
 export type MerchantSession = {

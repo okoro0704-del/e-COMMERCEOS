@@ -33,10 +33,11 @@ export const config = {
     | "local"
     | "remote",
   primitivesServiceToken: process.env.PRIMITIVES_SERVICE_TOKEN ?? "dev-primitives-token",
+  // No public fallback in production: an empty token makes every internal route reject.
   internalProvisionToken:
     process.env.INTERNAL_PROVISION_TOKEN ??
     process.env.PRIMITIVES_SERVICE_TOKEN ??
-    "dev-primitives-token",
+    (appEnv === "production" ? "" : "dev-primitives-token"),
   storefrontLaunchUrlTemplate:
     process.env.STOREFRONT_LAUNCH_URL ?? "https://{subdomain}.getlifeos.app",
   adminLaunchUrlTemplate:
@@ -54,6 +55,10 @@ export const config = {
   digipediaManageKey: process.env.DIGIPEDIA_MANAGE_KEY ?? "",
   unpaidOrderTimeoutMs: Number(process.env.UNPAID_ORDER_TIMEOUT_MS ?? 30 * 60 * 1000),
   staffSessionTtlHours: 12,
-  skipProductionAssert: process.env.ECO_SKIP_PRODUCTION_ASSERT === "true",
+  /**
+   * Customer online payment (FundzMan escrow path). Off unless explicitly enabled, and
+   * refused in production because this build has no verified payment provider integration.
+   */
+  protectedCheckoutEnabled: process.env.ECO_PROTECTED_CHECKOUT_ENABLED === "true",
   version: "0.1.0",
 };

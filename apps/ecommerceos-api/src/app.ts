@@ -7,8 +7,10 @@ import { prisma } from "./db.js";
 import { registerRoutes } from "./routes.js";
 import { registerLocalPrimitiveProvidersOrRemote } from "./services/register-primitives.js";
 import { registerJobHandlers } from "./services/jobs.js";
+import { assertProductionSafety } from "./lib/production-safety.js";
 
 export async function buildApp() {
+  const safetyWarnings = assertProductionSafety(config);
   registerLocalPrimitiveProvidersOrRemote();
   registerJobHandlers();
 
@@ -82,6 +84,10 @@ export async function buildApp() {
   });
 
   await registerRoutes(app);
+
+  for (const warning of safetyWarnings) {
+    app.log.warn({ safety: true }, warning);
+  }
 
   app.addHook("onClose", async () => {
     await prisma.$disconnect();

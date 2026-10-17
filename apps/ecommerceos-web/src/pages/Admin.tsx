@@ -26,6 +26,15 @@ import type { MarketplaceProjectedProduct, MerchantSession, Order, Product, Stor
 
 const SESSION_KEY = "eco_merchant_session";
 
+/** Never present an order as paid unless the API reports a verified payment. */
+function paymentLabel(order: Order) {
+  if (order.paymentVerified) return "Paid";
+  if (order.paymentStatus === "simulated_not_paid") return "Not paid (test payment)";
+  if (order.paymentStatus === "provider_reported") return "Reported, not confirmed";
+  if (order.paymentStatus === "unpaid") return "Not paid";
+  return "—";
+}
+
 function readSession(): MerchantSession | null {
   const raw = localStorage.getItem(SESSION_KEY);
   return raw ? (JSON.parse(raw) as MerchantSession) : null;
@@ -378,6 +387,7 @@ export function AdminPage() {
               <th>Number</th>
               <th>Buyer</th>
               <th>Status</th>
+              <th>Payment</th>
               <th>Total</th>
             </tr>
           </thead>
@@ -387,6 +397,7 @@ export function AdminPage() {
                 <td>{order.orderNumber}</td>
                 <td>{order.buyerName}</td>
                 <td className="status">{order.status}</td>
+                <td>{paymentLabel(order)}</td>
                 <td>{formatMoney(order.totalMinor, order.currency)}</td>
               </tr>
             ))}

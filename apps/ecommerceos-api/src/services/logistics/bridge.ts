@@ -4,9 +4,7 @@ import { httpError } from "../../lib/crypto.js";
 import { getLogisticsClient } from "./client.js";
 import { appendOrderEvent } from "../orders.js";
 import { consumeReservation } from "../inventory.js";
-import { getFundzManWalletProvider } from "../lifeos/container.js";
 import { notifyOrderStatus } from "../notifications.js";
-import { storeInvoicePdf } from "../invoices.js";
 
 export async function dispatchPaidOrder(orderId: string) {
   const order = await prisma.order.findUnique({
@@ -151,70 +149,27 @@ export async function applyLogisticsWebhook(input: {
     return { order: updated, skipped: false };
   }
 
-  return settleDeliveredOrder(order.id);
+  return recordDelivery(order.id);
 }
 
-export async function settleDeliveredOrder(orderId: string) {
+/**
+ * Records delivery and consumes the reserved stock. It deliberately neither releases
+ * funds nor completes the order: completion needs buyer acceptance and a
+ * provider-confirmed settlement, and this build has neither.
+ */
+export async function recordDelivery(orderId: string) {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
     include: { items: true },
   });
   if (!order) throw httpError(404, "not_found", "Order not found");
-  if (order.status === "COMPLETED") return { order, skipped: true };
-  if (order.status !== "IN_TRANSIT" && order.status !== "DISPATCH_PENDING" && order.status !== "DELIVERED") {
-    throw httpError(409, "illegal_transition", `Cannot settle delivery from ${order.status}`);
+  if (order.status === "DELIVERED" || order.status === "COMPLETED") return { order, skipped: true };
+  if (order.status !== "IN_TRANSIT" && order.status !== "DISPATCH_PENDING") {
+    throw httpError(409, "illegal_transition", `Cannot record delivery from ${order.status}`);
   }
-  if (order.status === "DISPATCH_PENDING") {
-    assertTransition("DISPATCH_PENDING", "DELIVERED");
-  } else if (order.status === "IN_TRANSIT") {
-    assertTransition("IN_TRANSIT", "DELIVERED");
-  }
-  if (!order.escrowPaymentId) {
-    throw httpError(409, "missing_escrow", "Order has no FundzMan escrow payment");
-  }
+  assertTransition(order.status as OrderStatus, "DELIVERED");
 
-  const store = await prisma.storeConfig.findUnique({ where: { tenantId: order.tenantId } });
-  if (!store) throw httpError(409, "store_not_configured", "Store has not been provisioned");
-
-  if (order.status !== "DELIVERED") {
-    await prisma.$transaction(async (tx) => {
-      await tx.order.update({
-        where: { id: order.id },
-        data: { status: "DELIVERED", deliveredAt: new Date() },
-      });
-      await appendOrderEvent(tx, {
-        orderId: order.id,
-        fromStatus: order.status,
-        toStatus: "DELIVERED",
-        source: "logistics.webhook",
-        payload: { logisticsStatus: "DELIVERED" },
-      });
-    });
-  }
-
-  const release = await getFundzManWalletProvider().releaseEscrow({
-    paymentId: order.escrowPaymentId,
-    currency: order.currency,
-    reference: order.id,
-    splits: [
-      { payeeId: order.tenantId, role: "merchant", amount: order.merchantShareMinor },
-      { payeeId: store.riderPayeeId, role: "rider", amount: order.riderFeeMinor },
-      { payeeId: store.platformPayeeId, role: "platform", amount: order.platformCommissionMinor },
-    ],
-    metadata: { orderId: order.id, orderNumber: order.orderNumber },
-  });
-
-  const invoice = await storeInvoicePdf({
-    tenantId: order.tenantId,
-    orderId: order.id,
-    orderNumber: order.orderNumber,
-    buyerName: order.buyerName,
-    currency: order.currency,
-    totalMinor: order.totalMinor,
-    status: "COMPLETED",
-  });
-
-  const completed = await prisma.$transaction(async (tx) => {
+  const delivered = await prisma.$transaction(async (tx) => {
     for (const item of order.items) {
       await consumeReservation(tx, {
         tenantId: order.tenantId,
@@ -225,20 +180,15 @@ export async function settleDeliveredOrder(orderId: string) {
     }
     const next = await tx.order.update({
       where: { id: order.id },
-      data: {
-        status: "COMPLETED",
-        completedAt: new Date(),
-        invoiceDriveKey: invoice.key,
-        invoiceDriveUrl: invoice.url,
-      },
+      data: { status: "DELIVERED", deliveredAt: new Date() },
       include: { items: true, events: true },
     });
     await appendOrderEvent(tx, {
       orderId: order.id,
-      fromStatus: "DELIVERED",
-      toStatus: "COMPLETED",
-      source: "fundzman.escrow_release",
-      payload: { releaseId: release.releaseId, splits: release.splits },
+      fromStatus: order.status,
+      toStatus: "DELIVERED",
+      source: "logistics.webhook",
+      payload: { logisticsStatus: "DELIVERED", settlement: "not_released" },
     });
     return next;
   });
@@ -253,5 +203,5 @@ export async function settleDeliveredOrder(orderId: string) {
     message: "Your order {orderNumber} has been delivered. Thank you for shopping with {storeName}.",
   });
 
-  return { order: completed, skipped: false, release, invoice };
+  return { order: delivered, skipped: false };
 }

@@ -13,6 +13,7 @@ import { registerLifeOsPublicRoutes } from "./routes/lifeos-public.js";
 import { registerBusinessPublicationRoutes } from "./routes/business-publications.js";
 import { config } from "./config.js";
 import { assertLifeOsPrimitivesReady, getLifeOsPrimitives } from "./services/lifeos/container.js";
+import { onlinePaymentAvailability } from "./services/checkout.js";
 
 export async function registerRoutes(app: FastifyInstance) {
   await registerInternalProvisionRoutes(app);
@@ -42,6 +43,8 @@ export async function registerRoutes(app: FastifyInstance) {
       ok: ready.ok,
       count: ready.count,
       ids: ready.ids,
+      mode: config.primitivesMode,
+      onlinePayment: onlinePaymentAvailability().available,
       health: {
         trustId: await c.trustId.health(),
         messaging: await c.messaging.health(),

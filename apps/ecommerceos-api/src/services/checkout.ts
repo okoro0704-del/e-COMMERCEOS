@@ -1,11 +1,29 @@
 import { assertTransition } from "@ecommerceos/shared";
 import { prisma } from "../db.js";
+import { config } from "../config.js";
 import { httpError } from "../lib/crypto.js";
 import { appendOrderEvent, getOrder } from "./orders.js";
 import { dispatchPaidOrder } from "./logistics/bridge.js";
 import { getFundzManWalletProvider } from "./lifeos/container.js";
+import { LocalFundzManAdapter } from "./lifeos/local-adapters.js";
 import { storeInvoicePdf } from "./invoices.js";
 import { notifyOrderStatus } from "./notifications.js";
+
+export type OnlinePaymentAvailability =
+  | { available: true }
+  | { available: false; reason: "disabled" | "no_payment_provider" };
+
+/**
+ * Online payment is only offered when explicitly enabled and backed by a real provider.
+ * The local adapter can never take money, so it never makes payment available.
+ */
+export function onlinePaymentAvailability(): OnlinePaymentAvailability {
+  if (!config.protectedCheckoutEnabled) return { available: false, reason: "disabled" };
+  if (getFundzManWalletProvider() instanceof LocalFundzManAdapter) {
+    return { available: false, reason: "no_payment_provider" };
+  }
+  return { available: true };
+}
 
 export async function payOrder(opts: {
   tenantId: string;
@@ -25,6 +43,13 @@ export async function payOrder(opts: {
   if (order.paymentExpiresAt < new Date()) {
     throw httpError(409, "payment_expired", "Unpaid order window has expired");
   }
+  if (!onlinePaymentAvailability().available) {
+    throw httpError(
+      503,
+      "payments_unavailable",
+      "Online payment is not available for this store yet. No payment has been taken.",
+    );
+  }
 
   const payment = await getFundzManWalletProvider().initiatePayment({
     payerTrustId: opts.buyerTrustId,
@@ -36,8 +61,9 @@ export async function payOrder(opts: {
     metadata: { orderId: order.id, orderNumber: order.orderNumber },
   });
 
-  if (payment.status !== "escrow_held" && payment.status !== "authorized") {
-    throw httpError(402, "payment_failed", payment.message ?? "FundzMan did not hold escrow");
+  // Only a provider-reported hold with a payment reference moves the order forward.
+  if (payment.status !== "escrow_held" || !payment.paymentId) {
+    throw httpError(402, "payment_failed", payment.message ?? "Payment was not completed. No funds are held.");
   }
 
   assertTransition("PENDING_PAYMENT", "PAID_ESCROW");
