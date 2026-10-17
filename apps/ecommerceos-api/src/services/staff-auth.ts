@@ -178,13 +178,8 @@ export async function changeStaffPassword(opts: {
 }
 
 /**
- * Called by LifeOS Portal (service token) for a signed-in Portal owner. Binds the store's
- * owner account to the Portal identity on first use (legacy stores match by owner email)
- * and returns a single-use code the browser exchanges for a store admin session.
- */
-/**
  * Binds a not-yet-claimed store owner to the Portal identity that proved the owner email.
- * The read above is only a snapshot, so the claim itself is conditional at write time: the row is
+ * The caller's read is only a snapshot, so the claim itself is conditional at write time: the row is
  * updated only while it still has no identity, and exactly one claimant can change it. A repeat by
  * the identity that already won is the same claim. Any other claimant is refused and never
  * overwrites the bound owner.
@@ -221,6 +216,11 @@ async function claimLegacyOwner(tenantId: string, staffId: string, ownerSubject:
   return staff;
 }
 
+/**
+ * Called by LifeOS Portal (service token) for a signed-in Portal owner. Binds the store's
+ * owner account to the Portal identity on first use (legacy stores match by owner email)
+ * and returns a single-use code the browser exchanges for a store admin session.
+ */
 export async function createAdminHandoff(opts: {
   subdomain: string;
   tenantId?: string;
