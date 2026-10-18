@@ -11,3 +11,12 @@
   from = "/*"
   to = "/index.html"
   status = 200
+
+# Deploy Previews and branch deploys never talk to the production API. netlify.toml values
+# override the site's UI variables of the same name; the reserved .invalid name never resolves.
+# Point these at a staging API once one exists.
+[context.deploy-preview.environment]
+  VITE_API_URL = "https://ecommerceos-api.preview.invalid"
+
+[context.branch-deploy.environment]
+  VITE_API_URL = "https://ecommerceos-api.preview.invalid"

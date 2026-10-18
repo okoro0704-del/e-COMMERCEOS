@@ -1,0 +1,87 @@
+name: CI
+
+# Verification only: nothing here deploys, and no job holds production credentials.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Every outbound base URL points at a reserved name that never resolves (RFC 6761), so no test
+  # can reach a production service, even through a default (DIGIPEDIA_URL defaults to production).
+  DIGIPEDIA_URL: https://digipedia.ci.invalid
+  PORTAL_API_URL: https://portal.ci.invalid
+  TRUSTID_API_URL: https://trustid.ci.invalid
+  ELFCOM_URL: https://elfcom.ci.invalid
+  SOVEREIGN_DRIVE_URL: https://drive.ci.invalid
+  PLATFORM_JOBS_URL: https://jobs.ci.invalid
+  MASTER_DISTRIBUTOR_URL: https://distributor.ci.invalid
+  FUNDZMAN_URL: https://fundzman.ci.invalid
+  LOGISTICS_OS_URL: https://logistics.ci.invalid
+  PRIMITIVES_MODE: local
+  LOGISTICS_MODE: local
+
+jobs:
+  sqlite:
+    name: Build, typecheck, e2e (SQLite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci
+      # The build generates the Prisma client; typecheck and tests need it.
+      - name: Build
+        run: npm run build
+      - name: Typecheck
+        run: npm run typecheck
+      - name: e2e (SQLite)
+        run: npm run test:e2e
+
+  postgres:
+    name: e2e (PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Throwaway CI container only. DATABASE_URL selects the PostgreSQL schema when the Prisma
+      # client is generated; each e2e file then gets its own database on this server.
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      ECO_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build (PostgreSQL Prisma client)
+        run: npm run build
+      - name: e2e (PostgreSQL)
+        run: npm run test:e2e
