@@ -9,6 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
+import { prismaSchemaArgs, testDatabaseUrl } from "./test-database.ts";
 import {
   ECOMMERCEOS_DEFAULT_MODULES,
   ECOMMERCEOS_DEFAULT_SEED,
@@ -19,7 +20,7 @@ const apiRoot = path.resolve(__dirname, "../../apps/ecommerceos-api");
 const testDbPath = path.join(apiRoot, "prisma", `portal-provision-${process.pid}.db`);
 
 process.env.NODE_ENV = "test";
-process.env.DATABASE_URL = `file:./portal-provision-${process.pid}.db`;
+process.env.DATABASE_URL = testDatabaseUrl(`file:./portal-provision-${process.pid}.db`);
 process.env.INTERNAL_PROVISION_TOKEN = "portal-e2e-token";
 process.env.PRIMITIVES_MODE = "local";
 process.env.LOGISTICS_MODE = "local";
@@ -36,9 +37,9 @@ before(async () => {
       // Windows may keep a handle from a previous run; prisma db push will reuse/reset.
     }
   }
-  execSync("npx prisma db push --skip-generate", {
+  execSync(`npx prisma db push --skip-generate${prismaSchemaArgs()}`, {
     cwd: apiRoot,
-    env: { ...process.env, DATABASE_URL: `file:./portal-provision-${process.pid}.db`, NODE_ENV: "test" },
+    env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL, NODE_ENV: "test" },
     stdio: "pipe",
   });
 

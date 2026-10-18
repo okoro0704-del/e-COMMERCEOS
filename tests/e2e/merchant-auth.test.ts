@@ -12,6 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
+import { prismaSchemaArgs, testDatabaseUrl } from "./test-database.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const apiRoot = path.resolve(__dirname, "../../apps/ecommerceos-api");
@@ -24,7 +25,7 @@ const GOOD_PASSWORD = "Harbor-Lantern-Passw0rd-26";
 const SERVICE = { authorization: "Bearer auth-e2e-token" };
 
 process.env.NODE_ENV = "test";
-process.env.DATABASE_URL = `file:./${dbName}`;
+process.env.DATABASE_URL = testDatabaseUrl(`file:./${dbName}`);
 process.env.INTERNAL_PROVISION_TOKEN = "auth-e2e-token";
 process.env.PRIMITIVES_MODE = "local";
 process.env.LOGISTICS_MODE = "local";
@@ -41,9 +42,9 @@ before(async () => {
       /* reused by prisma db push */
     }
   }
-  execSync("npx prisma db push --skip-generate", {
+  execSync(`npx prisma db push --skip-generate${prismaSchemaArgs()}`, {
     cwd: apiRoot,
-    env: { ...process.env, DATABASE_URL: `file:./${dbName}`, NODE_ENV: "test" },
+    env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL, NODE_ENV: "test" },
     stdio: "pipe",
   });
   const { buildApp } = await import("../../apps/ecommerceos-api/src/app.ts");
