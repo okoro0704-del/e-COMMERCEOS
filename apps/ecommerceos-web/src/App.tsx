@@ -4,6 +4,7 @@ import { CartPage } from "./pages/Cart";
 import { MarketplaceProductPage } from "./pages/MarketplaceProduct";
 import { NotFoundPage } from "./pages/NotFound";
 import { OrderPage } from "./pages/Order";
+import { PlatformPage } from "./pages/Platform";
 import { ProductPage } from "./pages/Product";
 import { PublicationPage } from "./pages/Publication";
 import { StorefrontPage } from "./pages/Storefront";
@@ -30,6 +31,8 @@ export function App() {
           <Route path="/checkout" element={<CartPage />} />
           <Route path="/order/:id" element={<OrderPage />} />
           <Route path="/admin" element={<AdminPage />} />
+          {/* Digiconomy staff console; deliberately not linked from the storefront navigation. */}
+          <Route path="/platform" element={<PlatformPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </main>

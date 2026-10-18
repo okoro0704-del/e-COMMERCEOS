@@ -7,9 +7,16 @@ import type {
   MarketplaceProjectedProduct,
   MarketplaceSearch,
   MarketplaceStore,
+  MarketingPartner,
   MerchantSession,
   Order,
+  PartnerCommissionRow,
+  PlatformOverview,
+  PlatformSession,
+  PlatformStore,
+  ActivationRecord,
   Product,
+  StoreActivation,
   Storefront,
 } from "./types";
 
@@ -126,10 +133,10 @@ export async function loadStorefront(): Promise<{ store: Storefront; products: P
   if (DEMO_MODE) {
     return { store: { ...DEMO_STORE, subdomain: storeSubdomain() }, products: DEMO_PRODUCTS, mode: "demo" };
   }
-  const [store, products] = await Promise.all([
-    request<Storefront>("/v1/storefront"),
-    request<Product[]>("/v1/storefront/products"),
-  ]);
+  const store = await request<Storefront>("/v1/storefront");
+  // A store awaiting its verified setup payment has no public catalogue yet.
+  if (store.activation?.open === false) return { store, products: [], mode: "live" };
+  const products = await request<Product[]>("/v1/storefront/products");
   return { store, products, mode: "live" };
 }
 
@@ -379,6 +386,77 @@ export async function createProduct(
     },
     token,
   );
+}
+
+export async function updateProduct(token: string, id: string, input: { title?: string; status?: string }) {
+  return request<Product>(`/v1/products/${id}`, { method: "PATCH", body: JSON.stringify(input) }, token);
+}
+
+export async function updateVariantPrice(token: string, variantId: string, priceMinor: number) {
+  return request(`/v1/variants/${variantId}`, { method: "PATCH", body: JSON.stringify({ priceMinor }) }, token);
+}
+
+export async function adjustStock(token: string, variantId: string, delta: number, reason: string) {
+  return request(`/v1/inventory/variants/${variantId}`, { method: "PATCH", body: JSON.stringify({ delta, reason }) }, token);
+}
+
+export async function loadStoreActivation(token: string) {
+  return request<StoreActivation>("/v1/activation", {}, token);
+}
+
+export async function submitStoreActivation(
+  token: string,
+  input: { plan: string; paymentReference: string; payerName: string; paidAt?: string; partnerCode?: string },
+) {
+  return request<ActivationRecord>("/v1/activation/submit", { method: "POST", body: JSON.stringify(input) }, token);
+}
+
+// Digiconomy platform console. Operator sessions are separate from store sessions.
+
+export async function platformLogin(email: string, password: string) {
+  return request<PlatformSession>("/v1/platform/login", { method: "POST", body: JSON.stringify({ email, password }) });
+}
+
+export async function platformLogout(token: string) {
+  await request("/v1/platform/logout", { method: "POST" }, token).catch(() => undefined);
+}
+
+export async function platformOverview(token: string) {
+  return request<PlatformOverview>("/v1/platform/overview", {}, token);
+}
+
+export async function platformStores(token: string) {
+  return request<{ stores: PlatformStore[] }>("/v1/platform/stores", {}, token);
+}
+
+export async function platformActivations(token: string, status?: string) {
+  const suffix = status ? `?status=${encodeURIComponent(status)}` : "";
+  return request<{ activations: ActivationRecord[] }>(`/v1/platform/activations${suffix}`, {}, token);
+}
+
+export async function reviewActivation(
+  token: string,
+  id: string,
+  action: "verify" | "reject" | "reverse",
+  body: { amountReceivedMinor?: number; currency?: string; reason?: string },
+) {
+  return request<ActivationRecord>(`/v1/platform/activations/${id}/${action}`, { method: "POST", body: JSON.stringify(body) }, token);
+}
+
+export async function platformPartners(token: string) {
+  return request<{ partners: MarketingPartner[] }>("/v1/platform/partners", {}, token);
+}
+
+export async function createPartner(token: string, input: { code: string; name: string; email: string }) {
+  return request<MarketingPartner>("/v1/platform/partners", { method: "POST", body: JSON.stringify(input) }, token);
+}
+
+export async function setPartnerStatus(token: string, id: string, action: "suspend" | "reactivate") {
+  return request<MarketingPartner>(`/v1/platform/partners/${id}/${action}`, { method: "POST" }, token);
+}
+
+export async function platformCommissions(token: string) {
+  return request<{ commissions: PartnerCommissionRow[] }>("/v1/platform/commissions", {}, token);
 }
 
 export function demoOrders() {

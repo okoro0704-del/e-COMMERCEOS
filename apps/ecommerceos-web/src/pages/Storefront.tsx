@@ -45,6 +45,15 @@ export function StorefrontPage() {
 
   if (error) return <p className="empty">This store is unavailable right now. {error}</p>;
   if (!store) return <p className="empty">Loading store…</p>;
+  if (store.activation?.open === false) {
+    return (
+      <section className="hero">
+        <p className="badge">{store.subdomain}.getlifeos.app</p>
+        <h1>{store.storeName}</h1>
+        <p>This store is getting ready and will open soon.</p>
+      </section>
+    );
+  }
 
   const model = store.operatingModel ?? "store";
   const occupants = store.destinationOccupants ?? [];

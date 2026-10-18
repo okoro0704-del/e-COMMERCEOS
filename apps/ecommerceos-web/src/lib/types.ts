@@ -37,6 +37,8 @@ export type Storefront = {
   }>;
   wholesale?: { minQuantityDefault?: number } | null;
   checkout?: { onlinePayment: boolean };
+  /** Closed while the store awaits its verified setup payment. */
+  activation?: { open: boolean };
 };
 
 export type Product = {
@@ -162,4 +164,89 @@ export type MerchantSession = {
     tenantId: string;
     tenantSlug: string;
   };
+};
+
+export type ActivationOffer = {
+  plan: "standard" | "early_adopter";
+  amountMinor: number;
+  currency: string;
+  available: boolean;
+  reason?: string;
+};
+
+export type ActivationRecord = {
+  id: string;
+  plan: string;
+  amountMinor: number;
+  currency: string;
+  status: "payment_submitted" | "verified" | "rejected" | "reversed";
+  paymentReference: string;
+  payerName: string;
+  paidAt: string | null;
+  submittedAt: string;
+  verifiedAt: string | null;
+  rejectedAt: string | null;
+  rejectedReason: string | null;
+  reversedAt: string | null;
+  reversedReason: string | null;
+  partner: { code: string; name: string } | null;
+  commission: { amountMinor: number; currency: string; rateBps: number; status: string } | null;
+  store?: { tenantId: string; slug: string; name: string };
+};
+
+export type StoreActivation = {
+  required: boolean;
+  status: "legacy" | "pending" | "active";
+  storeOpen: boolean;
+  offers: ActivationOffer[];
+  paymentInstructions: string;
+  submissions: ActivationRecord[];
+};
+
+export type PlatformOperator = { id?: string; operatorId?: string; email: string; displayName: string; role: "verifier" | "admin" };
+export type PlatformSession = { token: string; expiresAt: string; operator: PlatformOperator };
+
+export type MarketingPartner = {
+  id: string;
+  code: string;
+  name: string;
+  email: string;
+  status: "active" | "suspended";
+  createdAt: string;
+  referrals: number;
+  verifiedReferrals: number;
+  commissionAccruedMinor: Record<string, number>;
+  commissionReversedMinor: Record<string, number>;
+};
+
+export type PartnerCommissionRow = {
+  id: string;
+  partner: { id: string; code: string; name: string };
+  activationId: string;
+  store: { slug: string; name: string };
+  rateBps: number;
+  amountMinor: number;
+  currency: string;
+  status: "accrued" | "reversed";
+  createdAt: string;
+  reversedAt: string | null;
+};
+
+export type PlatformOverview = {
+  activationRequired: boolean;
+  stores: Record<string, number>;
+  activations: Record<string, number>;
+  partners: Record<string, number>;
+  verifiedSetupFeesMinor: Record<string, number>;
+  commissionsMinor: Array<{ status: string; currency: string; amountMinor: number }>;
+};
+
+export type PlatformStore = {
+  tenantId: string;
+  slug: string;
+  name: string;
+  status: string;
+  activationStatus: string;
+  currency: string | null;
+  createdAt: string;
 };
