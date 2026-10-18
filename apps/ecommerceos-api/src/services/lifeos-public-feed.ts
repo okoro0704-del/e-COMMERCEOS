@@ -1,6 +1,7 @@
 import { prisma } from "../db.js";
 import { config } from "../config.js";
 import { getLifeOsStorageProvider } from "./lifeos/container.js";
+import { buyerVisibleTenantWhere } from "./activation.js";
 
 function launchUrl(slug: string, path = ""): string {
   const base = config.storefrontLaunchUrlTemplate.replace("{subdomain}", slug).replace(/\/$/, "");
@@ -267,14 +268,14 @@ export async function listLifeOsPublicFeed(opts?: {
 
   const productWhere: Record<string, unknown> = {
     status: "active",
-    tenant: { status: "active", storeConfig: { isNot: null } },
+    tenant: { status: "active", storeConfig: { isNot: null }, ...buyerVisibleTenantWhere() },
   };
   const pubWhere: Record<string, unknown> = {
     status: "published",
     audience: "public",
     publishedAt: { not: null, lte: new Date() },
     OR: [{ scheduledAt: null }, { scheduledAt: { lte: new Date() } }],
-    tenant: { status: "active", storeConfig: { isNot: null } },
+    tenant: { status: "active", storeConfig: { isNot: null }, ...buyerVisibleTenantWhere() },
   };
 
   if (cursor?.k === "product" && (kind === "all" || kind === "product")) {

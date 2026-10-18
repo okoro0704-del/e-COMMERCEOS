@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireBuyer, requireMerchant, resolveMerchantAuth } from "../lib/auth.js";
 import { getOrder, listOrders, placeOrder, presentOrder } from "../services/orders.js";
 import { payOrder } from "../services/checkout.js";
+import { assertStoreOpen } from "../services/activation.js";
 
 const shippingSchema = z.object({
   addressLine1: z.string().min(1),
@@ -19,6 +20,7 @@ export async function registerOrderRoutes(app: FastifyInstance) {
   app.post("/v1/orders", async (req, reply) => {
     const auth = await requireBuyer(req, reply);
     if (!auth) return;
+    await assertStoreOpen(auth.tenantId);
     const body = z
       .object({
         buyerName: z.string().min(1),

@@ -7,6 +7,7 @@ import { passwordProblem } from "../../lib/password-policy.js";
 import { writeAudit } from "../../lib/audit.js";
 import { seedStoreDefaults } from "./provision-seed.js";
 import { getDistributorProvider, getLifeOsPrimitives } from "../lifeos/container.js";
+import { initialActivationStatus } from "../activation.js";
 
 export type ProvisionTenantInput = {
   distributorTenantId: string;
@@ -107,6 +108,7 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
       name: input.displayName,
       businessType: preset.id,
       status: "active",
+      activationStatus: initialActivationStatus(),
       lifeosBusinessId: input.trustId?.businessPublicId ?? input.distributorTenantId,
       logoUrl: input.brand?.logoUrl,
       primaryColor: input.brand?.primaryColor ?? ECOMMERCEOS_MANIFEST.brandDefaults.primaryColor,
