@@ -43,7 +43,7 @@ export function StorefrontPage() {
     [stores],
   );
 
-  if (error) return <p className="empty">{error}</p>;
+  if (error) return <p className="empty">This store is unavailable right now. {error}</p>;
   if (!store) return <p className="empty">Loading store…</p>;
 
   const model = store.operatingModel ?? "store";
@@ -74,7 +74,7 @@ export function StorefrontPage() {
     <>
       {mode === "demo" ? (
         <div className="banner">
-          Showing the Market Lane catalog. Connect <code>VITE_API_URL</code> to a live ECommerceOS API to load a provisioned store.
+          Preview catalog only. This is not a real store and checkout is disabled.
         </div>
       ) : null}
       <section className="hero">

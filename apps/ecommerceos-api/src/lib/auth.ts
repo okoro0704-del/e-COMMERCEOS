@@ -1,6 +1,6 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "../db.js";
-import { hashToken, httpError } from "./crypto.js";
+import { hashToken, httpError, isPasswordSet, isTemporaryPasswordHash } from "./crypto.js";
 import { getTrustIdProvider } from "../services/lifeos/container.js";
 import type { TrustIdSessionProof } from "@lifeos/shared";
 
@@ -13,6 +13,9 @@ export type MerchantAuth = {
   role: string;
   email: string;
   trustId?: string | null;
+  passwordSet: boolean;
+  /** Signed in with a password someone else chose; only password routes are open until it is replaced. */
+  mustChangePassword: boolean;
 };
 
 export type BuyerAuth = {
@@ -33,7 +36,7 @@ declare module "fastify" {
   }
 }
 
-function readBearer(req: FastifyRequest): string | null {
+export function readBearer(req: FastifyRequest): string | null {
   const header = req.headers.authorization;
   if (!header?.startsWith("Bearer ")) return null;
   return header.slice("Bearer ".length).trim() || null;
@@ -54,7 +57,8 @@ export async function resolveTenantId(req: FastifyRequest): Promise<string | nul
 
 export async function resolveMerchantAuth(req: FastifyRequest): Promise<MerchantAuth | null> {
   const token = readBearer(req);
-  if (!token) return null;
+  // Handoff codes and reset grants share the session table; only real session tokens authenticate.
+  if (!token || !token.startsWith("eco_")) return null;
 
   const session = await prisma.staffSession.findUnique({
     where: { tokenHash: hashToken(token) },
@@ -72,6 +76,8 @@ export async function resolveMerchantAuth(req: FastifyRequest): Promise<Merchant
     role: session.staff.role,
     email: session.staff.email,
     trustId: session.staff.trustId,
+    passwordSet: isPasswordSet(session.staff.passwordHash),
+    mustChangePassword: isTemporaryPasswordHash(session.staff.passwordHash),
   };
 }
 
@@ -92,10 +98,22 @@ export async function resolveBuyerAuth(req: FastifyRequest): Promise<BuyerAuth |
   };
 }
 
-export async function requireMerchant(req: FastifyRequest, reply: FastifyReply): Promise<MerchantAuth | void> {
+export async function requireMerchant(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  opts: { roles?: readonly string[]; allowPendingPasswordChange?: boolean } = {},
+): Promise<MerchantAuth | void> {
   const auth = await resolveMerchantAuth(req);
   if (!auth) {
     reply.code(401).send({ error: "unauthorized", message: "Merchant session required" });
+    return;
+  }
+  if (auth.mustChangePassword && !opts.allowPendingPasswordChange) {
+    reply.code(403).send({ error: "password_change_required", message: "Set a new password to continue." });
+    return;
+  }
+  if (opts.roles && !opts.roles.includes(auth.role)) {
+    reply.code(403).send({ error: "forbidden", message: "Your role cannot perform this action." });
     return;
   }
   req.auth = auth;
@@ -130,3 +148,6 @@ export function assertTenant(authTenantId: string, resourceTenantId: string) {
     throw httpError(403, "forbidden", "Tenant mismatch");
   }
 }
+
+/** Roles that may change store-wide settings, staff and marketplace membership. */
+export const STORE_ADMIN_ROLES = ["owner", "admin"] as const;

@@ -16,7 +16,7 @@ import type {
   TrustIdSessionProof,
   WalletBalanceSummary,
 } from "@lifeos/shared";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 export class LocalTrustIdAdapter implements ITrustIdProvider {
   readonly primitiveId = "trust-id" as const;
@@ -24,10 +24,14 @@ export class LocalTrustIdAdapter implements ITrustIdProvider {
   async health() {
     return { ok: true, service: "trustid-local" };
   }
+  /**
+   * Guest identity derived one-way from the bearer token, so stored order and cart
+   * owner ids never reveal a credential that could be replayed.
+   */
   async resolveSession(sessionToken: string): Promise<TrustIdSessionProof | null> {
     if (!sessionToken) return null;
-    const trustId = sessionToken.startsWith("TD-") ? sessionToken : `TD-${sessionToken}`;
-    return { trustId, sessionToken, trustTier: 1, verified: true };
+    const trustId = `TD-guest-${createHash("sha256").update(sessionToken).digest("hex").slice(0, 32)}`;
+    return { trustId, trustTier: 1, verified: true };
   }
 }
 
@@ -143,10 +147,14 @@ export class LocalMasterDistributorClient implements IMasterDistributorClient {
   }
 }
 
+/**
+ * In-process stand-in for FundzMan. It cannot move money, so it never reports a
+ * payment as authorized, held or settled, and it never releases funds.
+ */
 export class LocalFundzManAdapter implements IFundzManWalletProvider {
   readonly primitiveId = "fundzman" as const;
   readonly bound = true;
-  readonly intents = new Map<string, { amount: number; currency: string; status: string; payerTrustId: string }>();
+  readonly attempts: InitiatePaymentPayload[] = [];
   readonly releases: EscrowReleaseResult[] = [];
   private seq = 0;
 
@@ -156,33 +164,24 @@ export class LocalFundzManAdapter implements IFundzManWalletProvider {
 
   async initiatePayment(payload: InitiatePaymentPayload): Promise<PaymentResult> {
     this.seq += 1;
-    const paymentId = `local_pay_${this.seq}`;
-    const status = payload.escrow ? "escrow_held" : "authorized";
-    this.intents.set(paymentId, {
-      amount: payload.amount,
-      currency: payload.currency,
-      status,
-      payerTrustId: payload.payerTrustId,
-    });
+    this.attempts.push(payload);
     return {
-      paymentId,
-      status,
+      paymentId: `local_unpaid_${this.seq}`,
+      status: "failed",
       amount: payload.amount,
       currency: payload.currency,
-      receiptId: `local_rcpt_${this.seq}`,
-      message: "local fundzman stub",
+      message: "The local payment adapter cannot accept payments. No funds were moved.",
     };
   }
 
   async billPassThrough(payload: BillPaymentPayload): Promise<PaymentResult> {
     this.seq += 1;
     return {
-      paymentId: `local_bill_${this.seq}`,
-      status: "settled",
+      paymentId: `local_unpaid_bill_${this.seq}`,
+      status: "failed",
       amount: payload.amount,
       currency: payload.currency,
-      receiptId: `local_bill_rcpt_${this.seq}`,
-      message: "local bill pass-through",
+      message: "The local payment adapter cannot accept payments. No funds were moved.",
     };
   }
 
@@ -196,26 +195,10 @@ export class LocalFundzManAdapter implements IFundzManWalletProvider {
     };
   }
 
-  async releaseEscrow(payload: EscrowReleasePayload): Promise<EscrowReleaseResult> {
-    const intent = this.intents.get(payload.paymentId);
-    if (!intent || intent.status !== "escrow_held") {
-      throw Object.assign(new Error("No escrow to release"), { statusCode: 409, code: "escrow_not_held" });
-    }
-    const splitSum = payload.splits.reduce((s, x) => s + x.amount, 0);
-    if (splitSum !== intent.amount) {
-      throw Object.assign(new Error("Split sum does not match escrow amount"), {
-        statusCode: 400,
-        code: "split_mismatch",
-      });
-    }
-    intent.status = "settled";
-    const result: EscrowReleaseResult = {
-      releaseId: `local_rel_${++this.seq}`,
-      paymentId: payload.paymentId,
-      status: "settled",
-      splits: payload.splits,
-    };
-    this.releases.push(result);
-    return result;
+  async releaseEscrow(_payload: EscrowReleasePayload): Promise<EscrowReleaseResult> {
+    throw Object.assign(new Error("The local payment adapter holds no funds and cannot release any."), {
+      statusCode: 409,
+      code: "escrow_unavailable",
+    });
   }
 }

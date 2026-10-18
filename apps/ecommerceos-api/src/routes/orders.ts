@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { requireBuyer, requireMerchant, resolveMerchantAuth } from "../lib/auth.js";
-import { getOrder, listOrders, placeOrder } from "../services/orders.js";
+import { getOrder, listOrders, placeOrder, presentOrder } from "../services/orders.js";
 import { payOrder } from "../services/checkout.js";
 
 const shippingSchema = z.object({
@@ -32,32 +32,42 @@ export async function registerOrderRoutes(app: FastifyInstance) {
       buyerTrustId: auth.trustId,
       ...body,
     });
-    return reply.code(201).send(order);
+    return reply.code(201).send(presentOrder(order));
   });
 
   app.get("/v1/orders", async (req, reply) => {
     const merchant = await resolveMerchantAuth(req);
+    if (merchant?.mustChangePassword) {
+      return reply.code(403).send({ error: "password_change_required", message: "Set a new password to continue." });
+    }
     if (merchant) {
       const query = z.object({ status: z.string().optional() }).parse(req.query);
-      return listOrders({ tenantId: merchant.tenantId, status: query.status });
+      return (await listOrders({ tenantId: merchant.tenantId, status: query.status })).map((o) =>
+        presentOrder(o, { forMerchant: true }),
+      );
     }
     const buyer = await requireBuyer(req, reply);
     if (!buyer) return;
     const query = z.object({ status: z.string().optional() }).parse(req.query);
-    return listOrders({ tenantId: buyer.tenantId, buyerTrustId: buyer.trustId, status: query.status });
+    return (await listOrders({ tenantId: buyer.tenantId, buyerTrustId: buyer.trustId, status: query.status })).map(
+      (o) => presentOrder(o),
+    );
   });
 
   app.get("/v1/orders/:id", async (req, reply) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const merchant = await resolveMerchantAuth(req);
-    if (merchant) return getOrder(merchant.tenantId, id);
+    if (merchant?.mustChangePassword) {
+      return reply.code(403).send({ error: "password_change_required", message: "Set a new password to continue." });
+    }
+    if (merchant) return presentOrder(await getOrder(merchant.tenantId, id), { forMerchant: true });
     const buyer = await requireBuyer(req, reply);
     if (!buyer) return;
     const order = await getOrder(buyer.tenantId, id);
     if (order.buyerTrustId !== buyer.trustId) {
       return reply.code(403).send({ error: "forbidden", message: "Order does not belong to this Trust ID" });
     }
-    return order;
+    return presentOrder(order);
   });
 
   app.post("/v1/checkout/pay", async (req, reply) => {
@@ -69,6 +79,6 @@ export async function registerOrderRoutes(app: FastifyInstance) {
       orderId: body.orderId,
       buyerTrustId: auth.trustId,
     });
-    return reply.send(result);
+    return reply.send({ ...result, order: presentOrder(result.order) });
   });
 }

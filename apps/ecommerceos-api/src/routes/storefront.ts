@@ -5,6 +5,7 @@ import { requireBuyer, requireTenant } from "../lib/auth.js";
 import { listCategories, getProduct, listProducts } from "../services/catalog.js";
 import { listPublicPublications } from "../services/publications.js";
 import { addCartItem, getCart, removeCartItem, updateCartItem } from "../services/cart.js";
+import { onlinePaymentAvailability } from "../services/checkout.js";
 import {
   projectMarketplaceCatalog,
   projectMarketplaceProduct,
@@ -55,6 +56,9 @@ export async function registerStorefrontRoutes(app: FastifyInstance) {
         : [],
       onlineMarketplace: isOnlineMarketplaceOperator(settings),
       wholesale: settings.wholesale ?? null,
+      checkout: {
+        onlinePayment: onlinePaymentAvailability().available,
+      },
     };
   });
 

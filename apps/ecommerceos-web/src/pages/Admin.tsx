@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import {
   addDestinationOccupant,
+  changeMerchantPassword,
+  exchangeAdminHandoff,
+  merchantLogout,
   createBusinessPublication,
   createMarketplaceSellerStore,
   createProduct,
@@ -26,9 +29,39 @@ import type { MarketplaceProjectedProduct, MerchantSession, Order, Product, Stor
 
 const SESSION_KEY = "eco_merchant_session";
 
+/** Never present an order as paid unless the API reports a verified payment. */
+function paymentLabel(order: Order) {
+  if (order.paymentVerified) return "Paid";
+  if (order.paymentStatus === "simulated_not_paid") return "Not paid (test payment)";
+  if (order.paymentStatus === "provider_reported") return "Reported, not confirmed";
+  if (order.paymentStatus === "unpaid") return "Not paid";
+  return "—";
+}
+
 function readSession(): MerchantSession | null {
-  const raw = localStorage.getItem(SESSION_KEY);
-  return raw ? (JSON.parse(raw) as MerchantSession) : null;
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    return raw ? (JSON.parse(raw) as MerchantSession) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSession(session: MerchantSession | null) {
+  try {
+    if (session) localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    else localStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* session still lives in memory for this page */
+  }
+}
+
+/** A Portal handoff arrives as #handoff=<code>; take it once and remove it from the address bar. */
+function takeHandoffCode(): string | null {
+  const match = window.location.hash.match(/[#&]handoff=([^&]+)/);
+  if (!match) return null;
+  window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  return decodeURIComponent(match[1]!);
 }
 
 export function AdminPage() {
@@ -63,6 +96,27 @@ export function AdminPage() {
   const [projected, setProjected] = useState<MarketplaceProjectedProduct[]>([]);
   const [createdNote, setCreatedNote] = useState<string | null>(null);
   const [adminTab, setAdminTab] = useState<"overview" | "stores" | "catalogue">("overview");
+  const [resetGrant, setResetGrant] = useState<string | null>(null);
+  const [pwForm, setPwForm] = useState({ current: "", next: "" });
+  const [pwNote, setPwNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    const code = takeHandoffCode();
+    if (code) {
+      exchangeAdminHandoff(code)
+        .then(async (next) => {
+          const { resetGrant: grant, ...rest } = next;
+          saveSession(rest);
+          setSession(rest);
+          setResetGrant(grant);
+          await refresh(rest.token);
+        })
+        .catch((err: Error) => setError(err.message));
+      return;
+    }
+    const existing = readSession();
+    if (existing && !existing.mustChangePassword) void refresh(existing.token);
+  }, []);
 
   async function refresh(token: string) {
     const [nextProducts, nextOrders, nextOccupants, nextSellers] = await Promise.all([
@@ -98,16 +152,18 @@ export function AdminPage() {
             setError(null);
             try {
               const next = await merchantLogin(email, password);
-              localStorage.setItem(SESSION_KEY, JSON.stringify(next));
+              saveSession(next);
               setSession(next);
-              await refresh(next.token);
+              if (!next.mustChangePassword) await refresh(next.token);
             } catch (err) {
               setError(err instanceof Error ? err.message : "Login failed");
               setDemo(true);
             }
           }}
         >
-          <p className="muted small">Sign in with a provisioned staff account. Without an API this console stays in preview mode.</p>
+          <p className="muted small">
+            Sign in to this store with your staff email and password, or open the admin from LifeOS Portal.
+          </p>
           <label>
             Email
             <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
@@ -124,9 +180,11 @@ export function AdminPage() {
           <p className="muted small">Signed in as {session.staff.displayName}</p>
           <button
             className="btn ghost"
-            onClick={() => {
-              localStorage.removeItem(SESSION_KEY);
+            onClick={async () => {
+              await merchantLogout(session.token);
+              saveSession(null);
               setSession(null);
+              setResetGrant(null);
               setDemo(true);
               setProducts(demoProducts());
               setOrders(demoOrders());
@@ -136,6 +194,71 @@ export function AdminPage() {
           </button>
         </div>
       )}
+
+      {session ? (
+        <section className="card stack" style={{ maxWidth: 480 }}>
+          <h2>
+            {resetGrant || session.mustChangePassword || session.passwordSet === false
+              ? "Set a new password"
+              : "Change password"}
+          </h2>
+          {session.mustChangePassword ? (
+            <p className="small" role="status">
+              This password was set for you by someone else. Choose your own to continue.
+            </p>
+          ) : null}
+          <form
+            className="stack"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setPwNote(null);
+              setError(null);
+              try {
+                const result = await changeMerchantPassword(session.token, {
+                  newPassword: pwForm.next,
+                  currentPassword: resetGrant || session.passwordSet === false ? undefined : pwForm.current,
+                  resetGrant: resetGrant ?? undefined,
+                });
+                const next = { ...session, passwordSet: result.passwordSet, mustChangePassword: result.mustChangePassword };
+                saveSession(next);
+                setSession(next);
+                setResetGrant(null);
+                setPwForm({ current: "", next: "" });
+                setPwNote("Password saved. Other signed-in devices were signed out.");
+                await refresh(next.token);
+              } catch (err) {
+                setError(err instanceof Error ? err.message : "Could not save the password");
+              }
+            }}
+          >
+            {resetGrant || session.passwordSet === false ? null : (
+              <label>
+                Current password
+                <input
+                  type="password"
+                  required
+                  autoComplete="current-password"
+                  value={pwForm.current}
+                  onChange={(e) => setPwForm({ ...pwForm, current: e.target.value })}
+                />
+              </label>
+            )}
+            <label>
+              New password (at least 12 characters)
+              <input
+                type="password"
+                required
+                minLength={12}
+                autoComplete="new-password"
+                value={pwForm.next}
+                onChange={(e) => setPwForm({ ...pwForm, next: e.target.value })}
+              />
+            </label>
+            {pwNote ? <p className="muted small" role="status">{pwNote}</p> : null}
+            <button className="btn secondary" type="submit">Save password</button>
+          </form>
+        </section>
+      ) : null}
 
       {demo ? (
         <div className="banner">Preview catalog and orders. Live data appears after a successful merchant login.</div>
@@ -378,6 +501,7 @@ export function AdminPage() {
               <th>Number</th>
               <th>Buyer</th>
               <th>Status</th>
+              <th>Payment</th>
               <th>Total</th>
             </tr>
           </thead>
@@ -387,6 +511,7 @@ export function AdminPage() {
                 <td>{order.orderNumber}</td>
                 <td>{order.buyerName}</td>
                 <td className="status">{order.status}</td>
+                <td>{paymentLabel(order)}</td>
                 <td>{formatMoney(order.totalMinor, order.currency)}</td>
               </tr>
             ))}

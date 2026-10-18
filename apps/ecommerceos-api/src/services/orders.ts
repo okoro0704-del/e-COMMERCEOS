@@ -216,3 +216,48 @@ export async function sweepUnpaidOrders(now = new Date()) {
   }
   return { scanned: expired.length, results };
 }
+
+export type OrderPaymentStatus = "unpaid" | "simulated_not_paid" | "provider_reported";
+export type OrderFulfilmentStatus =
+  | "not_started"
+  | "awaiting_dispatch"
+  | "in_transit"
+  | "delivered"
+  | "completed"
+  | "cancelled";
+
+const FULFILMENT_BY_STATUS: Record<string, OrderFulfilmentStatus> = {
+  PENDING_PAYMENT: "not_started",
+  PAID_ESCROW: "not_started",
+  DISPATCH_PENDING: "awaiting_dispatch",
+  IN_TRANSIT: "in_transit",
+  DELIVERED: "delivered",
+  COMPLETED: "completed",
+  CANCELLED: "cancelled",
+};
+
+/**
+ * Payment and fulfilment read separately from the single stored status, so a
+ * dispatched order is never mistaken for a paid one. Orders "paid" through the
+ * old local stub carry a `local_` payment id and are reported as not paid.
+ */
+export function presentOrder<T extends { status: string; escrowPaymentId: string | null; buyerTrustId: string }>(
+  order: T,
+  opts: { forMerchant?: boolean } = {},
+) {
+  const paymentStatus: OrderPaymentStatus = !order.escrowPaymentId
+    ? "unpaid"
+    : order.escrowPaymentId.startsWith("local_")
+      ? "simulated_not_paid"
+      : "provider_reported";
+  // Older rows hold the buyer's bearer token as buyerTrustId; merchants never see it.
+  const { buyerTrustId, ...rest } = order;
+  return {
+    ...rest,
+    ...(opts.forMerchant ? {} : { buyerTrustId }),
+    paymentStatus,
+    // No provider webhook verification exists in this build, so nothing counts as verified paid.
+    paymentVerified: false,
+    fulfilmentStatus: FULFILMENT_BY_STATUS[order.status] ?? "not_started",
+  };
+}

@@ -101,7 +101,7 @@ test("POST /internal/distributor/provision seeds store from ECommerceOSManifest"
         email: `owner@${subdomain}.example`,
         displayName: "Store Owner",
         role: "owner",
-        password: "Password123!",
+        password: "E2e-Store-Passw0rd-2026!",
       },
     },
   });
@@ -175,7 +175,7 @@ test("supermarket and shopping centre presets seed distinct operating models", a
         email: `owner@${supermarketSub}.example`,
         displayName: "Operator",
         role: "owner",
-        password: "Password123!",
+        password: "E2e-Store-Passw0rd-2026!",
       },
     },
   });
@@ -193,7 +193,7 @@ test("supermarket and shopping centre presets seed distinct operating models", a
         email: `owner@${centreSub}.example`,
         displayName: "Operator",
         role: "owner",
-        password: "Password123!",
+        password: "E2e-Store-Passw0rd-2026!",
       },
     },
   });

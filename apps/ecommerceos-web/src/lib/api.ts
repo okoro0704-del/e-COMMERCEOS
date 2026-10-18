@@ -15,7 +15,21 @@ import type {
 
 const API_BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 
+/** Preview catalog for design reviews only. Never used as a fallback for a live store. */
+export const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === "true";
+
 export type ApiMode = "live" | "demo";
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
 
 async function request<T>(path: string, init: RequestInit = {}, auth?: string): Promise<T> {
   const headers = new Headers(init.headers);
@@ -24,10 +38,15 @@ async function request<T>(path: string, init: RequestInit = {}, auth?: string): 
   headers.set("x-store-subdomain", storeSubdomain());
   if (auth) headers.set("Authorization", `Bearer ${auth}`);
 
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  } catch {
+    throw new ApiError("Could not reach the store. Check your connection and try again.", 0, "network_error");
+  }
   const data = (await res.json().catch(() => ({}))) as T & { message?: string; error?: string };
   if (!res.ok) {
-    throw new Error(data.message || data.error || `Request failed (${res.status})`);
+    throw new ApiError(data.message || data.error || `Request failed (${res.status})`, res.status, data.error ?? "request_failed");
   }
   return data;
 }
@@ -104,153 +123,229 @@ export async function createBusinessPublication(
 }
 
 export async function loadStorefront(): Promise<{ store: Storefront; products: Product[]; mode: ApiMode }> {
-  try {
-    const [store, products] = await Promise.all([
-      request<Storefront>("/v1/storefront"),
-      request<Product[]>("/v1/storefront/products"),
-    ]);
-    return { store, products, mode: "live" };
-  } catch {
+  if (DEMO_MODE) {
     return { store: { ...DEMO_STORE, subdomain: storeSubdomain() }, products: DEMO_PRODUCTS, mode: "demo" };
   }
+  const [store, products] = await Promise.all([
+    request<Storefront>("/v1/storefront"),
+    request<Product[]>("/v1/storefront/products"),
+  ]);
+  return { store, products, mode: "live" };
+}
+
+export async function loadCheckoutAvailability(): Promise<{ onlinePayment: boolean }> {
+  if (DEMO_MODE) return { onlinePayment: false };
+  const store = await request<Storefront>("/v1/storefront");
+  return { onlinePayment: store.checkout?.onlinePayment === true };
 }
 
 export async function loadProduct(id: string): Promise<{ product: Product; mode: ApiMode }> {
-  try {
-    return { product: await request<Product>(`/v1/storefront/products/${id}`), mode: "live" };
-  } catch {
+  if (DEMO_MODE) {
     const product = DEMO_PRODUCTS.find((p) => p.id === id);
     if (!product) throw new Error("Product not found");
     return { product, mode: "demo" };
   }
+  return { product: await request<Product>(`/v1/storefront/products/${id}`), mode: "live" };
 }
 
-export async function loadCart(): Promise<{ cart: Cart; mode: ApiMode }> {
+function readDemoCart(): Cart {
   try {
-    return { cart: await request<Cart>("/v1/cart", {}, buyerToken()), mode: "live" };
-  } catch {
     const raw = localStorage.getItem("eco_demo_cart");
-    return { cart: raw ? (JSON.parse(raw) as Cart) : emptyCart(), mode: "demo" };
+    return raw ? (JSON.parse(raw) as Cart) : emptyCart();
+  } catch {
+    return emptyCart();
   }
 }
 
+export async function loadCart(): Promise<{ cart: Cart; mode: ApiMode }> {
+  if (DEMO_MODE) return { cart: readDemoCart(), mode: "demo" };
+  return { cart: await request<Cart>("/v1/cart", {}, buyerToken()), mode: "live" };
+}
+
+export async function loadOrder(id: string): Promise<Order> {
+  return request<Order>(`/v1/orders/${encodeURIComponent(id)}`, {}, buyerToken());
+}
+
 function saveDemoCart(cart: Cart) {
-  localStorage.setItem("eco_demo_cart", JSON.stringify(cart));
+  try {
+    localStorage.setItem("eco_demo_cart", JSON.stringify(cart));
+  } catch {
+    /* preview only */
+  }
   return cart;
 }
 
 export async function addToCart(variantId: string, product: Product): Promise<Cart> {
-  try {
-    return await request<Cart>(
+  if (!DEMO_MODE) {
+    return request<Cart>(
       "/v1/cart/items",
       { method: "POST", body: JSON.stringify({ variantId, quantity: 1 }) },
       buyerToken(),
     );
-  } catch {
-    const current = (await loadCart()).cart;
-    const variant = product.variants.find((v) => v.id === variantId) ?? product.variants[0];
-    if (!variant) return current;
-    const existing = current.items.find((i) => i.variantId === variant.id);
-    const items = existing
-      ? current.items.map((i) =>
-          i.variantId === variant.id
-            ? {
-                ...i,
-                quantity: i.quantity + 1,
-                lineTotalMinor: (i.quantity + 1) * i.unitPriceMinor,
-              }
-            : i,
-        )
-      : [
-          ...current.items,
-          {
-            id: `ci-${variant.id}`,
-            variantId: variant.id,
-            productId: product.id,
-            productTitle: product.title,
-            sku: variant.sku,
-            title: variant.title,
-            quantity: 1,
-            unitPriceMinor: variant.priceMinor,
-            lineTotalMinor: variant.priceMinor,
-          },
-        ];
-    return saveDemoCart({
-      ...current,
-      items,
-      subtotalMinor: items.reduce((s, i) => s + i.lineTotalMinor, 0),
-    });
   }
+  const current = readDemoCart();
+  const variant = product.variants.find((v) => v.id === variantId) ?? product.variants[0];
+  if (!variant) return current;
+  const existing = current.items.find((i) => i.variantId === variant.id);
+  const items = existing
+    ? current.items.map((i) =>
+        i.variantId === variant.id
+          ? { ...i, quantity: i.quantity + 1, lineTotalMinor: (i.quantity + 1) * i.unitPriceMinor }
+          : i,
+      )
+    : [
+        ...current.items,
+        {
+          id: `ci-${variant.id}`,
+          variantId: variant.id,
+          productId: product.id,
+          productTitle: product.title,
+          sku: variant.sku,
+          title: variant.title,
+          quantity: 1,
+          unitPriceMinor: variant.priceMinor,
+          lineTotalMinor: variant.priceMinor,
+        },
+      ];
+  return saveDemoCart({ ...current, items, subtotalMinor: items.reduce((s, i) => s + i.lineTotalMinor, 0) });
 }
 
 export async function updateCartItem(itemId: string, quantity: number): Promise<Cart> {
-  try {
-    return await request<Cart>(
+  if (!DEMO_MODE) {
+    return request<Cart>(
       `/v1/cart/items/${itemId}`,
       { method: "PATCH", body: JSON.stringify({ quantity }) },
       buyerToken(),
     );
-  } catch {
-    const current = (await loadCart()).cart;
-    const items =
-      quantity < 1
-        ? current.items.filter((i) => i.id !== itemId)
-        : current.items.map((i) =>
-            i.id === itemId
-              ? { ...i, quantity, lineTotalMinor: quantity * i.unitPriceMinor }
-              : i,
-          );
-    return saveDemoCart({
-      ...current,
-      items,
-      subtotalMinor: items.reduce((s, i) => s + i.lineTotalMinor, 0),
-    });
+  }
+  const current = readDemoCart();
+  const items =
+    quantity < 1
+      ? current.items.filter((i) => i.id !== itemId)
+      : current.items.map((i) => (i.id === itemId ? { ...i, quantity, lineTotalMinor: quantity * i.unitPriceMinor } : i));
+  return saveDemoCart({ ...current, items, subtotalMinor: items.reduce((s, i) => s + i.lineTotalMinor, 0) });
+}
+
+export type PendingOrder = { id: string; orderNumber: string; paymentExpiresAt: string };
+
+/** Raised when checkout does not complete. Carries the reserved, unpaid order (if any) for retry. */
+export class CheckoutError extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+    readonly pendingOrder: PendingOrder | null,
+  ) {
+    super(message);
+    this.name = "CheckoutError";
   }
 }
 
-export async function placeAndPay(input: {
+const pendingOrderKey = () => `eco_pending_order:${storeSubdomain()}`;
+
+function readPendingOrder(): PendingOrder | null {
+  try {
+    const raw = sessionStorage.getItem(pendingOrderKey());
+    if (!raw) return null;
+    const row = JSON.parse(raw) as PendingOrder;
+    return new Date(row.paymentExpiresAt).getTime() > Date.now() ? row : null;
+  } catch {
+    return null;
+  }
+}
+
+function writePendingOrder(row: PendingOrder | null) {
+  try {
+    if (row) sessionStorage.setItem(pendingOrderKey(), JSON.stringify(row));
+    else sessionStorage.removeItem(pendingOrderKey());
+  } catch {
+    /* retry still works within this page */
+  }
+}
+
+export function currentPendingOrder() {
+  return readPendingOrder();
+}
+
+/** Errors after which the reserved order can no longer be paid, so it should not be retried. */
+const TERMINAL_PAYMENT_ERRORS = new Set(["payment_expired", "illegal_transition", "not_found", "forbidden"]);
+
+export async function placeOrderAndPay(input: {
   buyerName: string;
   buyerPhone: string;
   addressLine1: string;
   city: string;
   country: string;
-}): Promise<{ orderId: string; status: string; mode: ApiMode }> {
+}): Promise<{ orderId: string; status: string }> {
+  if (DEMO_MODE) {
+    throw new CheckoutError("This is a preview store. Checkout is disabled.", "demo_mode", null);
+  }
+
+  let pending = readPendingOrder();
+  if (!pending) {
+    try {
+      const order = await request<{ id: string; orderNumber: string; paymentExpiresAt: string }>(
+        "/v1/orders",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            buyerName: input.buyerName,
+            buyerPhone: input.buyerPhone,
+            shipping: {
+              addressLine1: input.addressLine1,
+              city: input.city,
+              country: input.country,
+              lat: 6.5244,
+              lng: 3.3792,
+            },
+          }),
+        },
+        buyerToken(),
+      );
+      pending = { id: order.id, orderNumber: order.orderNumber, paymentExpiresAt: order.paymentExpiresAt };
+      writePendingOrder(pending);
+    } catch (err) {
+      const e = err instanceof ApiError ? err : new ApiError("Could not place the order.", 0, "request_failed");
+      throw new CheckoutError(e.message, e.code, null);
+    }
+  }
+
   try {
-    const order = await request<{ id: string; status: string }>(
-      "/v1/orders",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          buyerName: input.buyerName,
-          buyerPhone: input.buyerPhone,
-          shipping: {
-            addressLine1: input.addressLine1,
-            city: input.city,
-            country: input.country,
-            lat: 6.5244,
-            lng: 3.3792,
-          },
-        }),
-      },
-      buyerToken(),
-    );
     const paid = await request<{ order: { id: string; status: string } }>(
       "/v1/checkout/pay",
-      { method: "POST", body: JSON.stringify({ orderId: order.id }) },
+      { method: "POST", body: JSON.stringify({ orderId: pending.id }) },
       buyerToken(),
     );
-    return { orderId: paid.order.id, status: paid.order.status, mode: "live" };
-  } catch {
-    saveDemoCart(emptyCart());
-    return { orderId: `demo-${Date.now()}`, status: "DISPATCH_PENDING", mode: "demo" };
+    writePendingOrder(null);
+    return { orderId: paid.order.id, status: paid.order.status };
+  } catch (err) {
+    const e = err instanceof ApiError ? err : new ApiError("Payment did not complete.", 0, "request_failed");
+    const stillPayable = !TERMINAL_PAYMENT_ERRORS.has(e.code);
+    if (!stillPayable) writePendingOrder(null);
+    throw new CheckoutError(e.message, e.code, stillPayable ? pending : null);
   }
 }
 
+/** The store handle comes from this admin address (x-store-subdomain), so accounts are store-scoped. */
 export async function merchantLogin(email: string, password: string): Promise<MerchantSession> {
   return request<MerchantSession>("/v1/auth/merchant/login", {
     method: "POST",
     body: JSON.stringify({ email, password }),
   });
+}
+
+export async function exchangeAdminHandoff(code: string): Promise<MerchantSession & { resetGrant: string }> {
+  return request("/v1/auth/merchant/handoff/exchange", { method: "POST", body: JSON.stringify({ code }) });
+}
+
+export async function merchantLogout(token: string): Promise<void> {
+  await request("/v1/auth/merchant/logout", { method: "POST" }, token).catch(() => undefined);
+}
+
+export async function changeMerchantPassword(
+  token: string,
+  input: { newPassword: string; currentPassword?: string; resetGrant?: string },
+): Promise<{ ok: true; passwordSet: boolean; mustChangePassword: boolean }> {
+  return request("/v1/auth/merchant/password", { method: "POST", body: JSON.stringify(input) }, token);
 }
 
 export async function merchantCatalog(token: string): Promise<Product[]> {

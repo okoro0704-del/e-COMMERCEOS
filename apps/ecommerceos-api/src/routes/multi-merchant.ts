@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { requireMerchant, requireTenant } from "../lib/auth.js";
+import { requireMerchant, requireTenant, STORE_ADMIN_ROLES } from "../lib/auth.js";
 import {
   addOccupant,
   addSeller,
@@ -22,7 +22,7 @@ export async function registerMultiMerchantRoutes(app: FastifyInstance) {
   });
 
   app.post("/v1/destination/occupants", async (req, reply) => {
-    const auth = await requireMerchant(req, reply);
+    const auth = await requireMerchant(req, reply, { roles: [...STORE_ADMIN_ROLES, "manager"] });
     if (!auth) return;
     const body = z
       .object({
@@ -38,7 +38,7 @@ export async function registerMultiMerchantRoutes(app: FastifyInstance) {
   });
 
   app.post("/v1/marketplace/enable", async (req, reply) => {
-    const auth = await requireMerchant(req, reply);
+    const auth = await requireMerchant(req, reply, { roles: STORE_ADMIN_ROLES });
     if (!auth) return;
     return enableOnlineMarketplace(auth.tenantId);
   });
@@ -62,7 +62,7 @@ export async function registerMultiMerchantRoutes(app: FastifyInstance) {
   });
 
   app.post("/v1/marketplace/sellers", async (req, reply) => {
-    const auth = await requireMerchant(req, reply);
+    const auth = await requireMerchant(req, reply, { roles: STORE_ADMIN_ROLES });
     if (!auth) return;
     const body = z
       .object({
@@ -82,7 +82,7 @@ export async function registerMultiMerchantRoutes(app: FastifyInstance) {
   });
 
   app.post("/v1/marketplace/sellers/stores", async (req, reply) => {
-    const auth = await requireMerchant(req, reply);
+    const auth = await requireMerchant(req, reply, { roles: STORE_ADMIN_ROLES });
     if (!auth) return;
     const body = z
       .object({
@@ -98,7 +98,7 @@ export async function registerMultiMerchantRoutes(app: FastifyInstance) {
   });
 
   app.post("/v1/marketplace/sellers/connect", async (req, reply) => {
-    const auth = await requireMerchant(req, reply);
+    const auth = await requireMerchant(req, reply, { roles: STORE_ADMIN_ROLES });
     if (!auth) return;
     const body = z
       .object({
@@ -110,7 +110,7 @@ export async function registerMultiMerchantRoutes(app: FastifyInstance) {
   });
 
   app.patch("/v1/marketplace/sellers/:id", async (req, reply) => {
-    const auth = await requireMerchant(req, reply);
+    const auth = await requireMerchant(req, reply, { roles: STORE_ADMIN_ROLES });
     if (!auth) return;
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const body = z.object({ status: z.enum(["invited", "active", "suspended", "removed"]) }).parse(req.body);
