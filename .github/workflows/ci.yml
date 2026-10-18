@@ -85,3 +85,19 @@ jobs:
         run: npm run build
       - name: e2e (PostgreSQL)
         run: npm run test:e2e
+
+  isolation:
+    name: Environment isolation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      # Static checks: Netlify previews, the web app, this workflow and the API config defaults
+      # must not be able to send preview, CI or staging traffic to production.
+      - name: Check environment isolation
+        run: node scripts/ci/check-environment-isolation.mjs
