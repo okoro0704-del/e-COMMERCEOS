@@ -1,5 +1,13 @@
 # Reviewed false positives, by exact gitleaks finding fingerprint (commit:file:rule:line).
-# tests/e2e/merchant-auth.test.ts GOOD_PASSWORD: a test-only fixture password. It appears in no
-# other file in the history of this repository and matches no production configuration value
-# (checked by SHA-256 fingerprint on 2026-10-18).
+# tests/e2e/merchant-auth.test.ts GOOD_PASSWORD: a test-only fixture password. Until 2026-10-18 it
+# appeared in no other file in the history of this repository, and it matches no production
+# configuration value (checked by SHA-256 fingerprint on 2026-10-18). Since 2026-10-19 the Phase 2
+# test files below reuse it as their store-owner fixture.
 3c9e258a4864560aab6bef9525f379e2a02799d9:tests/e2e/merchant-auth.test.ts:generic-api-key:23
+
+# Phase 2 test-only fixture passwords (2026-10-19), written for these suites and never used
+# outside them: store-owner and platform-operator fixtures, and a deliberately wrong password.
+490a1c435ecf2268833b697a265353a620fdee58:tests/e2e/commercial-activation.test.ts:generic-api-key:196
+490a1c435ecf2268833b697a265353a620fdee58:tests/e2e/commercial-activation.test.ts:generic-api-key:23
+490a1c435ecf2268833b697a265353a620fdee58:tests/e2e/commercial-activation.test.ts:generic-api-key:24
+727157fa03ec217819b7a311b9cc3c0ad1a5a3a3:tests/e2e/merchant-dashboard.test.ts:generic-api-key:20
