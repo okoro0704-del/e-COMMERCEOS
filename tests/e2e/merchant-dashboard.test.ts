@@ -187,3 +187,12 @@ test("the inventory view lists low-stock variants", async () => {
   assert.ok(ids.includes(low));
   assert.ok(!ids.includes(plenty));
 });
+
+test("the admin is told plainly when DigiPedia is not available, never 'Internal server error'", async () => {
+  const store = await newStore("digipedia");
+  const res = await app.inject({ method: "GET", url: "/v1/admin/digipedia", headers: bearer(store.owner) });
+  assert.equal(res.statusCode, 503, res.body);
+  assert.equal(res.json().error, "digipedia_unconfigured");
+  assert.equal(res.json().message, "DigiPedia is not available for this store yet.");
+  assert.doesNotMatch(res.body, /internal server error/i);
+});

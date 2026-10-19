@@ -41,3 +41,29 @@ test("EcommerceOS DigiPedia manage calls use ecommerceos origin and the server-c
     globalThis.fetch = originalFetch;
   }
 });
+
+test("an unreachable or failing DigiPedia is reported as temporarily unavailable, in plain words", async () => {
+  const savedKey = config.digipediaManageKey;
+  const originalFetch = globalThis.fetch;
+  config.digipediaManageKey = "test-manage-key";
+  try {
+    for (const fake of [
+      (async () => {
+        throw new TypeError("fetch failed");
+      }) as typeof fetch,
+      (async () => new Response("upstream exploded", { status: 502 })) as typeof fetch,
+    ]) {
+      globalThis.fetch = fake;
+      await assert.rejects(
+        () => callDigiPediaManage({ slug: "mpa-6ppyad", actorId: "staff_1", method: "GET" }),
+        (err: unknown) => {
+          const e = err as { statusCode?: number; code?: string; message?: string };
+          return e.statusCode === 503 && e.code === "digipedia_unavailable" && /temporarily unavailable/i.test(e.message ?? "");
+        },
+      );
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    config.digipediaManageKey = savedKey;
+  }
+});

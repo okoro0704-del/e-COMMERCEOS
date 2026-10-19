@@ -64,9 +64,11 @@ export async function buildApp() {
     if (status >= 500) {
       app.log.error({ err, requestId }, "request failed");
     }
+    // Unexpected failures stay generic; a deliberate "service unavailable" keeps its plain message.
+    const deliberate = status === 503 && code !== "internal_error" && Boolean((err as { code?: string }).code);
     return reply.code(status).send({
       error: code,
-      message: status >= 500 ? "Internal server error" : (err as Error).message,
+      message: status >= 500 && !deliberate ? "Internal server error" : (err as Error).message,
       requestId,
     });
   });
