@@ -2,6 +2,12 @@ import { Fragment, useEffect, useState } from "react";
 import {
   addDestinationOccupant,
   adjustStock,
+  cancelMerchantOrder,
+  loadBranding,
+  lowStock,
+  merchantOrder,
+  publicMediaUrl,
+  saveBranding,
   changeMerchantPassword,
   exchangeAdminHandoff,
   merchantLogout,
@@ -30,7 +36,16 @@ import {
   uploadMedia,
 } from "../lib/api";
 import { formatMoney } from "../lib/money";
-import type { MarketplaceProjectedProduct, MerchantSession, Order, Product, StoreActivation, Storefront } from "../lib/types";
+import type {
+  InventoryRow,
+  MarketplaceProjectedProduct,
+  MerchantSession,
+  Order,
+  Product,
+  StoreActivation,
+  StoreBranding,
+  Storefront,
+} from "../lib/types";
 
 const SESSION_KEY = "eco_merchant_session";
 
@@ -271,6 +286,8 @@ export function AdminPage() {
       ) : null}
 
       {session && !demo ? <ActivationAdmin token={session.token} isOwner={session.staff.role === "owner"} /> : null}
+
+      {session && !demo && ["owner", "admin"].includes(session.staff.role) ? <BrandingAdmin token={session.token} /> : null}
 
       {session && !demo ? <DigiPediaAdmin token={session.token} /> : null}
 
@@ -533,31 +550,44 @@ export function AdminPage() {
         </div>
       </section>
 
-      <section className="card">
-        <h2>Orders</h2>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Number</th>
-              <th>Buyer</th>
-              <th>Status</th>
-              <th>Payment</th>
-              <th>Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            {orders.map((order) => (
-              <tr key={order.id}>
-                <td>{order.orderNumber}</td>
-                <td>{order.buyerName}</td>
-                <td className="status">{order.status}</td>
-                <td>{paymentLabel(order)}</td>
-                <td>{formatMoney(order.totalMinor, order.currency)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+      {session && !demo ? (
+        <OrdersAdmin
+          token={session.token}
+          orders={orders}
+          canCancel={["owner", "admin"].includes(session.staff.role)}
+          onChanged={async () => setOrders(await merchantOrders(session.token))}
+        />
+      ) : (
+        <section className="card">
+          <h2>Orders</h2>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Number</th>
+                  <th>Buyer</th>
+                  <th>Status</th>
+                  <th>Payment</th>
+                  <th>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orders.map((order) => (
+                  <tr key={order.id}>
+                    <td>{order.orderNumber}</td>
+                    <td>{order.buyerName}</td>
+                    <td className="status">{order.status}</td>
+                    <td>{paymentLabel(order)}</td>
+                    <td>{formatMoney(order.totalMinor, order.currency)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {session && !demo ? <LowStockAdmin token={session.token} products={products} /> : null}
 
       <section className="card stack">
         <h2>Destination directory</h2>
@@ -1245,5 +1275,265 @@ function ProductEditor({ token, product, onSaved }: { token: string; product: Pr
         </button>
       </div>
     </form>
+  );
+}
+
+/** Storefront branding: name, tagline, colour and logo (owners and admins). */
+function BrandingAdmin({ token }: { token: string }) {
+  const [branding, setBranding] = useState<StoreBranding | null>(null);
+  const [form, setForm] = useState({ storeName: "", tagline: "", primaryColor: "#1D4ED8" });
+  const [logoAssetId, setLogoAssetId] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    loadBranding(token)
+      .then((b) => {
+        setBranding(b);
+        setForm({ storeName: b.storeName, tagline: b.tagline, primaryColor: b.primaryColor });
+        setLogoAssetId(b.logoAssetId);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "Could not load branding."));
+  }, [token]);
+
+  if (!branding) return error ? <p className="small" style={{ color: "var(--eco-danger)" }}>{error}</p> : null;
+
+  return (
+    <section className="card stack">
+      <h2>Store branding</h2>
+      <div className="hero" style={{ background: `linear-gradient(135deg, ${form.primaryColor} 0%, #12343a 100%)`, marginBottom: 0 }}>
+        {logoAssetId ? <img className="store-logo" src={publicMediaUrl(logoAssetId)} alt="" /> : null}
+        <h3>{form.storeName || "Your store"}</h3>
+        {form.tagline ? <p className="tagline">{form.tagline}</p> : null}
+      </div>
+      <form
+        className="stack"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setBusy(true);
+          setError(null);
+          setNote(null);
+          try {
+            const saved = await saveBranding(token, { ...form, logoAssetId });
+            setBranding(saved);
+            setNote("Branding saved. Your storefront shows it now.");
+          } catch (err) {
+            setError(err instanceof Error ? err.message : "Could not save branding.");
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        <div className="row">
+          <label>
+            Store name
+            <input required maxLength={80} value={form.storeName} onChange={(e) => setForm({ ...form, storeName: e.target.value })} />
+          </label>
+          <label>
+            Brand colour
+            <input className="swatch" type="color" value={form.primaryColor} onChange={(e) => setForm({ ...form, primaryColor: e.target.value })} />
+          </label>
+        </div>
+        <label>
+          Tagline
+          <input maxLength={160} value={form.tagline} onChange={(e) => setForm({ ...form, tagline: e.target.value })} />
+        </label>
+        <label>
+          Logo (square image)
+          <input
+            type="file"
+            accept="image/*"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              setError(null);
+              try {
+                const bodyBase64 = await new Promise<string>((resolve, reject) => {
+                  const reader = new FileReader();
+                  reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
+                  reader.onerror = () => reject(new Error("Could not read the image."));
+                  reader.readAsDataURL(file);
+                });
+                const uploaded = await uploadMedia(token, { filename: file.name, contentType: file.type || "image/png", bodyBase64 });
+                setLogoAssetId(uploaded.id);
+              } catch (err) {
+                setError(err instanceof Error ? err.message : "Could not upload the logo.");
+              }
+            }}
+          />
+        </label>
+        {note ? <p className="muted small" role="status">{note}</p> : null}
+        {error ? <p className="small" style={{ color: "var(--eco-danger)" }}>{error}</p> : null}
+        <button className="btn secondary" type="submit" disabled={busy}>
+          {busy ? "Saving…" : "Save branding"}
+        </button>
+      </form>
+    </section>
+  );
+}
+
+const ORDER_FILTERS: Array<[string, string]> = [
+  ["", "All"],
+  ["PENDING_PAYMENT", "Awaiting payment"],
+  ["DISPATCH_PENDING", "To dispatch"],
+  ["IN_TRANSIT", "In transit"],
+  ["DELIVERED", "Delivered"],
+  ["CANCELLED", "Cancelled"],
+];
+
+/** Orders: filter by status, open the detail, cancel orders that were never paid. */
+function OrdersAdmin({
+  token,
+  orders,
+  canCancel,
+  onChanged,
+}: {
+  token: string;
+  orders: Order[];
+  canCancel: boolean;
+  onChanged: () => Promise<void>;
+}) {
+  const [filter, setFilter] = useState("");
+  const [open, setOpen] = useState<Order | null>(null);
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const visible = filter ? orders.filter((o) => o.status === filter) : orders;
+
+  return (
+    <section className="card stack">
+      <h2>Orders</h2>
+      <nav className="tabs" aria-label="Order status">
+        {ORDER_FILTERS.map(([value, label]) => (
+          <button key={value || "all"} type="button" className={filter === value ? "tab active" : "tab"} onClick={() => setFilter(value)}>
+            {label} ({value ? orders.filter((o) => o.status === value).length : orders.length})
+          </button>
+        ))}
+      </nav>
+      {visible.length ? (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Number</th>
+                <th>Buyer</th>
+                <th>Status</th>
+                <th>Payment</th>
+                <th>Total</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((order) => (
+                <Fragment key={order.id}>
+                  <tr>
+                    <td>{order.orderNumber}</td>
+                    <td>{order.buyerName}</td>
+                    <td className="status">{order.status}</td>
+                    <td>{paymentLabel(order)}</td>
+                    <td>{formatMoney(order.totalMinor, order.currency)}</td>
+                    <td>
+                      <button
+                        className="btn ghost"
+                        type="button"
+                        onClick={async () => {
+                          setError(null);
+                          setReason("");
+                          if (open?.id === order.id) return setOpen(null);
+                          try {
+                            setOpen(await merchantOrder(token, order.id));
+                          } catch (err) {
+                            setError(err instanceof Error ? err.message : "Could not open the order.");
+                          }
+                        }}
+                      >
+                        {open?.id === order.id ? "Close" : "View"}
+                      </button>
+                    </td>
+                  </tr>
+                  {open?.id === order.id ? (
+                    <tr>
+                      <td colSpan={6}>
+                        <div className="order-detail stack">
+                          <p className="small">
+                            Deliver to {open.shippingCity ?? "—"} · placed {new Date(open.createdAt).toLocaleString()}
+                          </p>
+                          <ul className="small">
+                            {(open.items ?? []).map((item) => (
+                              <li key={item.id}>
+                                {item.quantity} × {item.title} ({item.sku}) — {formatMoney(item.unitPriceMinor * item.quantity, open.currency)}
+                              </li>
+                            ))}
+                          </ul>
+                          <p className="muted small">
+                            History: {(open.events ?? []).map((ev) => ev.toStatus).join(" → ") || "—"}
+                            {open.cancelReason ? ` · ${open.cancelReason}` : ""}
+                          </p>
+                          {canCancel && open.status === "PENDING_PAYMENT" ? (
+                            <div className="row">
+                              <label>
+                                Reason to cancel
+                                <input value={reason} onChange={(e) => setReason(e.target.value)} />
+                              </label>
+                              <button
+                                className="btn ghost"
+                                type="button"
+                                disabled={reason.trim().length < 3}
+                                onClick={async () => {
+                                  setError(null);
+                                  try {
+                                    setOpen(await cancelMerchantOrder(token, open.id, reason));
+                                    await onChanged();
+                                  } catch (err) {
+                                    setError(err instanceof Error ? err.message : "Could not cancel the order.");
+                                  }
+                                }}
+                              >
+                                Cancel unpaid order
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="muted small">No orders in this view.</p>
+      )}
+      {error ? <p className="small" style={{ color: "var(--eco-danger)" }}>{error}</p> : null}
+    </section>
+  );
+}
+
+/** Variants running low (5 or fewer available), refreshed when the catalogue changes. */
+function LowStockAdmin({ token, products }: { token: string; products: Product[] }) {
+  const [rows, setRows] = useState<InventoryRow[] | null>(null);
+  useEffect(() => {
+    lowStock(token)
+      .then(setRows)
+      .catch(() => setRows([]));
+  }, [token, products]);
+  if (!rows) return null;
+  return (
+    <section className="card stack">
+      <h2>Low stock</h2>
+      {rows.length ? (
+        <ul className="small">
+          {rows.map((r) => (
+            <li key={r.variantId}>
+              <strong>{r.productTitle}</strong> ({r.sku}): {r.available} available
+              {r.reservedCount ? `, ${r.reservedCount} reserved for unpaid orders` : ""}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="muted small">Every product has more than 5 in stock.</p>
+      )}
+    </section>
   );
 }

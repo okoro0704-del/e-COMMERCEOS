@@ -12,6 +12,9 @@ export type Storefront = {
     country: string;
   };
   primaryColor?: string | null;
+  logoUrl?: string | null;
+  logoAssetId?: string | null;
+  tagline?: string;
   verticalId?: string;
   operatingModel?: string;
   hasPhysicalAddress?: boolean;
@@ -150,6 +153,10 @@ export type Order = {
   paymentStatus?: "unpaid" | "simulated_not_paid" | "provider_reported";
   paymentVerified?: boolean;
   fulfilmentStatus?: string;
+  shippingCity?: string;
+  cancelReason?: string | null;
+  items?: Array<{ id: string; sku: string; title: string; quantity: number; unitPriceMinor: number }>;
+  events?: Array<{ id: string; fromStatus: string | null; toStatus: string; source: string; createdAt: string }>;
 };
 
 export type MerchantSession = {
@@ -249,4 +256,22 @@ export type PlatformStore = {
   activationStatus: string;
   currency: string | null;
   createdAt: string;
+};
+
+export type StoreBranding = {
+  storeName: string;
+  tagline: string;
+  primaryColor: string;
+  logoUrl: string | null;
+  logoAssetId: string | null;
+};
+
+export type InventoryRow = {
+  variantId: string;
+  productId: string;
+  productTitle: string;
+  sku: string;
+  inventoryCount: number;
+  reservedCount: number;
+  available: number;
 };

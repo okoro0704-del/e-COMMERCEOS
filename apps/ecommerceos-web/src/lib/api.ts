@@ -15,6 +15,8 @@ import type {
   PlatformSession,
   PlatformStore,
   ActivationRecord,
+  InventoryRow,
+  StoreBranding,
   Product,
   StoreActivation,
   Storefront,
@@ -398,6 +400,34 @@ export async function updateVariantPrice(token: string, variantId: string, price
 
 export async function adjustStock(token: string, variantId: string, delta: number, reason: string) {
   return request(`/v1/inventory/variants/${variantId}`, { method: "PATCH", body: JSON.stringify({ delta, reason }) }, token);
+}
+
+/** Public URL of an uploaded store image (served by the API). */
+export function publicMediaUrl(assetId: string) {
+  return `${API_BASE}/v1/public/media/${encodeURIComponent(assetId)}`;
+}
+
+export async function loadBranding(token: string) {
+  return request<StoreBranding>("/v1/store/branding", {}, token);
+}
+
+export async function saveBranding(
+  token: string,
+  input: { storeName?: string; tagline?: string; primaryColor?: string; logoAssetId?: string | null },
+) {
+  return request<StoreBranding>("/v1/store/branding", { method: "PATCH", body: JSON.stringify(input) }, token);
+}
+
+export async function merchantOrder(token: string, id: string) {
+  return request<Order>(`/v1/orders/${encodeURIComponent(id)}`, {}, token);
+}
+
+export async function cancelMerchantOrder(token: string, id: string, reason: string) {
+  return request<Order>(`/v1/orders/${encodeURIComponent(id)}/cancel`, { method: "POST", body: JSON.stringify({ reason }) }, token);
+}
+
+export async function lowStock(token: string, threshold = 5) {
+  return request<InventoryRow[]>(`/v1/inventory?lowStock=true&threshold=${threshold}`, {}, token);
 }
 
 export async function loadStoreActivation(token: string) {
