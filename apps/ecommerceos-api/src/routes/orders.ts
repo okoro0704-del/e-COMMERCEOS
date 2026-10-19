@@ -4,6 +4,13 @@ import { requireBuyer, requireMerchant, resolveMerchantAuth, STORE_ADMIN_ROLES }
 import { cancelOrderByMerchant, getOrder, listOrders, placeOrder, presentOrder } from "../services/orders.js";
 import { payOrder } from "../services/checkout.js";
 import { assertStoreOpen } from "../services/activation.js";
+import {
+  advanceFulfilment,
+  PAYMENT_METHODS,
+  rejectTransferReport,
+  reportTransfer,
+  verifyTransfer,
+} from "../services/offline-checkout.js";
 
 const shippingSchema = z.object({
   addressLine1: z.string().min(1),
@@ -27,6 +34,7 @@ export async function registerOrderRoutes(app: FastifyInstance) {
         buyerPhone: z.string().optional(),
         buyerEmail: z.string().email().optional(),
         shipping: shippingSchema,
+        paymentMethod: z.enum(PAYMENT_METHODS).optional(),
       })
       .parse(req.body);
     const order = await placeOrder({
@@ -72,12 +80,59 @@ export async function registerOrderRoutes(app: FastifyInstance) {
     return presentOrder(order);
   });
 
+  // Customer: "I have sent the transfer". Recorded for the merchant to check; never marks the order paid.
+  app.post("/v1/orders/:id/payment-notification", async (req, reply) => {
+    const auth = await requireBuyer(req, reply);
+    if (!auth) return;
+    const { id } = z.object({ id: z.string() }).parse(req.params);
+    const body = z.object({ reference: z.string().trim().min(3).max(80), payerName: z.string().trim().min(1).max(120) }).parse(req.body);
+    const order = await reportTransfer({ tenantId: auth.tenantId, buyerTrustId: auth.trustId, orderId: id, ...body });
+    return presentOrder(order);
+  });
+
+  app.post("/v1/orders/:id/payment/verify", async (req, reply) => {
+    const auth = await requireMerchant(req, reply);
+    if (!auth) return;
+    const { id } = z.object({ id: z.string() }).parse(req.params);
+    const body = z
+      .object({ amountReceivedMinor: z.number().int().nonnegative(), merchantReference: z.string().trim().max(80).optional() })
+      .parse(req.body);
+    return presentOrder(await verifyTransfer(auth, id, body), { forMerchant: true });
+  });
+
+  app.post("/v1/orders/:id/payment/reject", async (req, reply) => {
+    const auth = await requireMerchant(req, reply);
+    if (!auth) return;
+    const { id } = z.object({ id: z.string() }).parse(req.params);
+    const body = z.object({ reason: z.string().trim().min(3).max(300) }).parse(req.body);
+    return presentOrder(await rejectTransferReport(auth, id, body.reason), { forMerchant: true });
+  });
+
+  app.post("/v1/orders/:id/fulfilment", async (req, reply) => {
+    const auth = await requireMerchant(req, reply);
+    if (!auth) return;
+    const { id } = z.object({ id: z.string() }).parse(req.params);
+    const body = z
+      .object({ action: z.enum(["dispatch", "deliver", "complete"]), amountCollectedMinor: z.number().int().nonnegative().optional() })
+      .parse(req.body);
+    return presentOrder(await advanceFulfilment(auth, id, body.action, body), { forMerchant: true });
+  });
+
   app.post("/v1/orders/:id/cancel", async (req, reply) => {
     const auth = await requireMerchant(req, reply, { roles: STORE_ADMIN_ROLES });
     if (!auth) return;
     const { id } = z.object({ id: z.string() }).parse(req.params);
-    const body = z.object({ reason: z.string().trim().min(3).max(300) }).parse(req.body);
-    const order = await cancelOrderByMerchant({ tenantId: auth.tenantId, staffId: auth.staffId, orderId: id, reason: body.reason });
+    const body = z
+      .object({ reason: z.string().trim().min(3).max(300), refundReference: z.string().trim().max(80).optional() })
+      .parse(req.body);
+    const order = await cancelOrderByMerchant({
+      tenantId: auth.tenantId,
+      staffId: auth.staffId,
+      role: auth.role,
+      orderId: id,
+      reason: body.reason,
+      refundReference: body.refundReference,
+    });
     return presentOrder(order, { forMerchant: true });
   });
 

@@ -77,6 +77,13 @@ model StoreConfig {
   deliveryFeeMinor        Int      @default(150000)
   platformPayeeId         String   @default("lifeos-platform")
   riderPayeeId            String   @default("logistics-rider-pool")
+  /// Offline payment methods the merchant accepts. Bank details belong to the merchant.
+  payOnDeliveryEnabled    Boolean  @default(false)
+  bankTransferEnabled     Boolean  @default(false)
+  bankName                String?
+  bankAccountName         String?
+  bankAccountNumber       String?
+  bankTransferNote        String?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
@@ -278,6 +285,8 @@ model Order {
   completedAt              DateTime?
   cancelledAt              DateTime?
   cancelReason             String?
+  /// pay_on_delivery | bank_transfer; null for orders from the disabled online checkout.
+  paymentMethod            String?
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @updatedAt
 
@@ -285,6 +294,7 @@ model Order {
   cart   Cart?        @relation(fields: [cartId], references: [id], onDelete: SetNull)
   items  OrderItem[]
   events OrderEvent[]
+  payment OrderPayment?
 
   @@unique([tenantId, orderNumber])
   @@index([tenantId, status])
@@ -417,6 +427,7 @@ model Activation {
   tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   partner    MarketingPartner? @relation(fields: [partnerId], references: [id], onDelete: Restrict)
   commission PartnerCommission?
+  documents  BillingDocument[]
 
   @@index([tenantId])
   @@index([status])
@@ -465,6 +476,12 @@ model PlatformOperator {
   displayName  String
   passwordHash String
   role         String   @default("verifier")
+  /// TOTP secret, encrypted with ECO_OPERATOR_MFA_KEY; set when enrollment starts.
+  mfaSecretEnc String?
+  mfaEnabledAt DateTime?
+  /// Last accepted TOTP time step: a code is never accepted twice.
+  mfaLastStep  Int?
+  createdById  String?
   status       String   @default("active")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -476,6 +493,9 @@ model PlatformSession {
   id         String    @id @default(cuid())
   operatorId String
   tokenHash  String    @unique
+  /// full: an MFA-verified session; mfa_challenge / mfa_enrollment: short-lived, MFA routes only.
+  kind       String    @default("full")
+  lastSeenAt DateTime?
   expiresAt  DateTime
   revokedAt  DateTime?
   createdAt  DateTime  @default(now())
@@ -483,4 +503,100 @@ model PlatformSession {
   operator PlatformOperator @relation(fields: [operatorId], references: [id], onDelete: Cascade)
 
   @@index([operatorId])
+}
+
+/// Payment for an order paid outside the platform: bank transfer to the merchant, or cash on
+/// delivery. Only a store owner or admin moves it to verified or collected; a customer's
+/// notification never does. No money passes through Digiconomy.
+model OrderPayment {
+  id                  String    @id @default(cuid())
+  orderId             String    @unique
+  tenantId            String
+  method              String
+  status              String
+  amountMinor         Int
+  currency            String
+  /// Bank details shown to the customer when the order was placed, kept as they were then.
+  bankName            String?
+  bankAccountName     String?
+  bankAccountNumber   String?
+  customerReference   String?
+  customerPayerName   String?
+  customerReportedAt  DateTime?
+  verifiedById        String?
+  verifiedAt          DateTime?
+  verifiedAmountMinor Int?
+  merchantReference   String?
+  rejectedById        String?
+  rejectedAt          DateTime?
+  rejectedReason      String?
+  refundReference     String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, status])
+}
+
+/// Draft invoice or receipt for a store's setup fee. Tax fields stay unreviewed until a tax
+/// treatment is decided; nothing here is a final tax document.
+model BillingDocument {
+  id                   String    @id @default(cuid())
+  activationId         String
+  tenantId             String
+  kind                 String
+  number               String    @unique
+  status               String    @default("draft")
+  billedToName         String
+  amountMinor          Int
+  currency             String
+  transactionReference String?
+  taxTreatment         String    @default("unreviewed")
+  taxRateBps           Int?
+  taxAmountMinor       Int?
+  supplierTaxId        String?
+  customerTaxId        String?
+  issuedAt             DateTime  @default(now())
+  voidedAt             DateTime?
+  voidReason           String?
+
+  activation Activation @relation(fields: [activationId], references: [id], onDelete: Restrict)
+
+  @@unique([activationId, kind])
+  @@index([tenantId])
+}
+
+/// One-time invitation for a new platform operator, issued by a platform admin.
+model PlatformInvitation {
+  id          String    @id @default(cuid())
+  email       String
+  role        String
+  tokenHash   String    @unique
+  invitedById String
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([email])
+}
+
+/// A high-risk platform action that a second admin must approve before it runs.
+model PlatformApproval {
+  id            String    @id @default(cuid())
+  kind          String
+  targetId      String
+  reason        String
+  status        String    @default("pending")
+  /// "<kind>:<targetId>" while pending: one open request per action and target.
+  pendingKey    String?   @unique
+  requestedById String
+  decidedById   String?
+  decidedAt     DateTime?
+  decisionNote  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([status])
 }

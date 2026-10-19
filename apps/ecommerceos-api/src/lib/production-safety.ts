@@ -18,6 +18,7 @@ export type SafetyConfig = {
   primitivesMode: string;
   logisticsMode: string;
   platformAdminToken?: string;
+  operatorMfaKey?: string;
   corsOrigins?: readonly string[];
 };
 
@@ -47,6 +48,10 @@ export function productionSafetyIssues(cfg: SafetyConfig): SafetyIssue[] {
     } else if (platformToken === token) {
       issues.push({ key: "ECO_PLATFORM_ADMIN_TOKEN", message: "must differ from INTERNAL_PROVISION_TOKEN" });
     }
+  }
+  const mfaKey = (cfg.operatorMfaKey ?? "").trim();
+  if (mfaKey && (mfaKey.length < 32 || KNOWN_INSECURE_SECRETS.has(mfaKey) || mfaKey === token || mfaKey === platformToken)) {
+    issues.push({ key: "ECO_OPERATOR_MFA_KEY", message: "must be at least 32 characters and not reuse another token" });
   }
   const unsafeOrigins = unsafeProductionOrigins(cfg.corsOrigins ?? []);
   if (unsafeOrigins.length) {

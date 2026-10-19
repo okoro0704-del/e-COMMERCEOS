@@ -4,11 +4,16 @@
  * PENDING_PAYMENT ──► PAID_ESCROW ──► DISPATCH_PENDING ──► IN_TRANSIT ──► DELIVERED ──► COMPLETED
  *         │                │                  │                 │
  *         └────────────────┴──────────────────┴─────────────────┴────────► CANCELLED
+ *
+ * Offline payment (bank transfer to the merchant, or pay on delivery), fulfilled by the merchant:
+ * PENDING_PAYMENT ──(merchant verifies the transfer)──► CONFIRMED ──► IN_TRANSIT ──► DELIVERED
+ * A pay-on-delivery order starts CONFIRMED. CONFIRMED and IN_TRANSIT can be CANCELLED.
  */
 
 export const ORDER_STATUSES = [
   "PENDING_PAYMENT",
   "PAID_ESCROW",
+  "CONFIRMED",
   "DISPATCH_PENDING",
   "IN_TRANSIT",
   "DELIVERED",
@@ -22,7 +27,8 @@ export const LOGISTICS_STATUSES = ["PICKED_UP", "IN_TRANSIT", "DELIVERED"] as co
 export type LogisticsStatus = (typeof LOGISTICS_STATUSES)[number];
 
 export const ORDER_TRANSITIONS: Record<OrderStatus, readonly OrderStatus[]> = {
-  PENDING_PAYMENT: ["PAID_ESCROW", "CANCELLED"],
+  PENDING_PAYMENT: ["PAID_ESCROW", "CONFIRMED", "CANCELLED"],
+  CONFIRMED: ["IN_TRANSIT", "DELIVERED", "CANCELLED"],
   PAID_ESCROW: ["DISPATCH_PENDING", "CANCELLED"],
   DISPATCH_PENDING: ["IN_TRANSIT", "DELIVERED", "CANCELLED"],
   IN_TRANSIT: ["DELIVERED", "CANCELLED"],
