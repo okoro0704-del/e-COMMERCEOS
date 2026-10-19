@@ -12,6 +12,7 @@ import {
   projectMarketplaceSearch,
   projectMarketplaceStores,
 } from "../services/multi-merchant.js";
+import { assertStoreOpen, storeOpenForBuyers } from "../services/activation.js";
 import { prisma } from "../db.js";
 
 export async function registerStorefrontRoutes(app: FastifyInstance) {
@@ -41,6 +42,9 @@ export async function registerStorefrontRoutes(app: FastifyInstance) {
         lng: store.pickupLng,
       },
       primaryColor: tenant?.primaryColor,
+      logoUrl: tenant?.logoUrl ?? null,
+      logoAssetId: typeof settings.logoAssetId === "string" ? settings.logoAssetId : null,
+      tagline: typeof settings.tagline === "string" ? settings.tagline : "",
       verticalId: typeof settings.verticalId === "string" ? settings.verticalId : tenant?.businessType ?? "retail",
       operatingModel: typeof settings.operatingModel === "string" ? settings.operatingModel : "store",
       hasPhysicalAddress: settings.hasPhysicalAddress !== false,
@@ -59,18 +63,22 @@ export async function registerStorefrontRoutes(app: FastifyInstance) {
       checkout: {
         onlinePayment: onlinePaymentAvailability().available,
       },
+      // A store awaiting its verified setup payment shows its name but no catalogue or checkout.
+      activation: { open: await storeOpenForBuyers(tenantId) },
     };
   });
 
   app.get("/v1/storefront/marketplace/stores", async (req, reply) => {
     const tenantId = await requireTenant(req, reply);
     if (!tenantId) return;
+    await assertStoreOpen(tenantId);
     return projectMarketplaceStores(tenantId);
   });
 
   app.get("/v1/storefront/marketplace/products", async (req, reply) => {
     const tenantId = await requireTenant(req, reply);
     if (!tenantId) return;
+    await assertStoreOpen(tenantId);
     const query = z.object({ q: z.string().optional() }).parse(req.query);
     return projectMarketplaceCatalog(tenantId, query.q);
   });
@@ -78,6 +86,7 @@ export async function registerStorefrontRoutes(app: FastifyInstance) {
   app.get("/v1/storefront/marketplace/search", async (req, reply) => {
     const tenantId = await requireTenant(req, reply);
     if (!tenantId) return;
+    await assertStoreOpen(tenantId);
     const query = z.object({ q: z.string().min(1) }).parse(req.query);
     return projectMarketplaceSearch(tenantId, query.q);
   });
@@ -85,6 +94,7 @@ export async function registerStorefrontRoutes(app: FastifyInstance) {
   app.get("/v1/storefront/marketplace/products/:storeRef/:productId", async (req, reply) => {
     const tenantId = await requireTenant(req, reply);
     if (!tenantId) return;
+    await assertStoreOpen(tenantId);
     const { storeRef, productId } = z.object({ storeRef: z.string(), productId: z.string() }).parse(req.params);
     return projectMarketplaceProduct(tenantId, storeRef, productId);
   });
@@ -92,24 +102,28 @@ export async function registerStorefrontRoutes(app: FastifyInstance) {
   app.get("/v1/storefront/categories", async (req, reply) => {
     const tenantId = await requireTenant(req, reply);
     if (!tenantId) return;
+    await assertStoreOpen(tenantId);
     return listCategories(tenantId);
   });
 
   app.get("/v1/storefront/publications", async (req, reply) => {
     const tenantId = await requireTenant(req, reply);
     if (!tenantId) return;
+    await assertStoreOpen(tenantId);
     return { publications: await listPublicPublications(tenantId) };
   });
 
   app.get("/v1/storefront/products", async (req, reply) => {
     const tenantId = await requireTenant(req, reply);
     if (!tenantId) return;
+    await assertStoreOpen(tenantId);
     return listProducts(tenantId, { status: "active" });
   });
 
   app.get("/v1/storefront/products/:id", async (req, reply) => {
     const tenantId = await requireTenant(req, reply);
     if (!tenantId) return;
+    await assertStoreOpen(tenantId);
     const { id } = z.object({ id: z.string() }).parse(req.params);
     return getProduct(tenantId, id);
   });
@@ -123,6 +137,7 @@ export async function registerStorefrontRoutes(app: FastifyInstance) {
   app.post("/v1/cart/items", async (req, reply) => {
     const auth = await requireBuyer(req, reply);
     if (!auth) return;
+    await assertStoreOpen(auth.tenantId);
     const body = z
       .object({
         variantId: z.string().min(1),
@@ -141,6 +156,7 @@ export async function registerStorefrontRoutes(app: FastifyInstance) {
   app.patch("/v1/cart/items/:id", async (req, reply) => {
     const auth = await requireBuyer(req, reply);
     if (!auth) return;
+    await assertStoreOpen(auth.tenantId);
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const body = z.object({ quantity: z.number().int() }).parse(req.body);
     return updateCartItem({

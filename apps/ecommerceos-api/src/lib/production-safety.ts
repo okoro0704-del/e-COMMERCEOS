@@ -1,4 +1,5 @@
 import type { AppEnv } from "../config.js";
+import { unsafeProductionOrigins } from "./cors.js";
 
 /** Development values shipped in this repo and in LifeOS Portal; none may guard production. */
 export const KNOWN_INSECURE_SECRETS = new Set([
@@ -16,6 +17,8 @@ export type SafetyConfig = {
   internalProvisionToken: string;
   primitivesMode: string;
   logisticsMode: string;
+  platformAdminToken?: string;
+  corsOrigins?: readonly string[];
 };
 
 export type SafetyIssue = { key: string; message: string };
@@ -35,6 +38,22 @@ export function productionSafetyIssues(cfg: SafetyConfig): SafetyIssue[] {
     issues.push({ key: "INTERNAL_PROVISION_TOKEN", message: "is required in production" });
   } else if (KNOWN_INSECURE_SECRETS.has(token)) {
     issues.push({ key: "INTERNAL_PROVISION_TOKEN", message: "refuses a publicly known development token" });
+  }
+  // Optional; when set it creates platform operators, so it must be strong and not shared with Portal.
+  const platformToken = (cfg.platformAdminToken ?? "").trim();
+  if (platformToken) {
+    if (platformToken.length < 32 || KNOWN_INSECURE_SECRETS.has(platformToken)) {
+      issues.push({ key: "ECO_PLATFORM_ADMIN_TOKEN", message: "must be at least 32 characters and not a known value" });
+    } else if (platformToken === token) {
+      issues.push({ key: "ECO_PLATFORM_ADMIN_TOKEN", message: "must differ from INTERNAL_PROVISION_TOKEN" });
+    }
+  }
+  const unsafeOrigins = unsafeProductionOrigins(cfg.corsOrigins ?? []);
+  if (unsafeOrigins.length) {
+    issues.push({
+      key: "CORS_ORIGINS",
+      message: `must list https origins Digiconomy controls; refused: ${unsafeOrigins.join(", ")}`,
+    });
   }
   return issues;
 }

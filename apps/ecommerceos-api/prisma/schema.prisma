@@ -32,6 +32,8 @@ model Tenant {
   logoUrl            String?
   primaryColor       String   @default("#1D4ED8")
   settings           Json
+  /// legacy: created before paid activation (open); pending: awaiting a verified setup payment; active: verified.
+  activationStatus   String   @default("legacy")
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -49,6 +51,7 @@ model Tenant {
   mediaAssets  MediaAsset[]
   businessPublications BusinessPublication[]
   auditLogs    AuditLog[]
+  activations  Activation[]
 
   @@index([organizationId])
   @@index([status])
@@ -375,4 +378,109 @@ model AuditLog {
 
   @@index([tenantId])
   @@index([action])
+}
+
+/// A store's paid brand setup, verified by hand by Digiconomy platform staff. No payment is
+/// collected here: the owner pays outside the platform and submits the transfer reference.
+model Activation {
+  id                 String    @id @default(cuid())
+  tenantId           String
+  plan               String
+  amountMinor        Int
+  currency           String
+  status             String    @default("payment_submitted")
+  partnerId          String?
+  paymentReference   String
+  payerName          String
+  paidAt             DateTime?
+  submittedById      String?
+  tenantStatusBefore String
+  /// The normalized payment reference while it is claimed (submitted, verified or reversed): one payment activates one store.
+  referenceKey       String?   @unique
+  /// The tenant id while this submission awaits review: one open submission per store.
+  pendingKey         String?   @unique
+  /// The tenant id while verified: at most one verified activation per store.
+  activeKey          String?   @unique
+  verifiedById       String?
+  verifiedAt         DateTime?
+  /// Set once verification has opened the store and credited any commission; reversal waits for it.
+  appliedAt          DateTime?
+  rejectedById       String?
+  rejectedAt         DateTime?
+  rejectedReason     String?
+  reversedById       String?
+  reversedAt         DateTime?
+  reversedReason     String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  partner    MarketingPartner? @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  commission PartnerCommission?
+
+  @@index([tenantId])
+  @@index([status])
+}
+
+/// A marketing partner who refers businesses; earns commission on verified setup payments only.
+model MarketingPartner {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  email       String
+  status      String   @default("active")
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  activations Activation[]
+  commissions PartnerCommission[]
+
+  @@index([status])
+}
+
+/// Commission on one verified setup activation, credited at most once and reversed with it.
+model PartnerCommission {
+  id           String    @id @default(cuid())
+  activationId String    @unique
+  partnerId    String
+  rateBps      Int
+  amountMinor  Int
+  currency     String
+  status       String    @default("accrued")
+  reversedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  activation Activation       @relation(fields: [activationId], references: [id], onDelete: Restrict)
+  partner    MarketingPartner @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+
+  @@index([partnerId, status])
+}
+
+/// Digiconomy staff who verify setup payments and manage partners. Not store accounts.
+model PlatformOperator {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  displayName  String
+  passwordHash String
+  role         String   @default("verifier")
+  status       String   @default("active")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  sessions PlatformSession[]
+}
+
+model PlatformSession {
+  id         String    @id @default(cuid())
+  operatorId String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  operator PlatformOperator @relation(fields: [operatorId], references: [id], onDelete: Cascade)
+
+  @@index([operatorId])
 }

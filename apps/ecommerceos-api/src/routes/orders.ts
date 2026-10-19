@@ -1,8 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { requireBuyer, requireMerchant, resolveMerchantAuth } from "../lib/auth.js";
-import { getOrder, listOrders, placeOrder, presentOrder } from "../services/orders.js";
+import { requireBuyer, requireMerchant, resolveMerchantAuth, STORE_ADMIN_ROLES } from "../lib/auth.js";
+import { cancelOrderByMerchant, getOrder, listOrders, placeOrder, presentOrder } from "../services/orders.js";
 import { payOrder } from "../services/checkout.js";
+import { assertStoreOpen } from "../services/activation.js";
 
 const shippingSchema = z.object({
   addressLine1: z.string().min(1),
@@ -19,6 +20,7 @@ export async function registerOrderRoutes(app: FastifyInstance) {
   app.post("/v1/orders", async (req, reply) => {
     const auth = await requireBuyer(req, reply);
     if (!auth) return;
+    await assertStoreOpen(auth.tenantId);
     const body = z
       .object({
         buyerName: z.string().min(1),
@@ -68,6 +70,15 @@ export async function registerOrderRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: "forbidden", message: "Order does not belong to this Trust ID" });
     }
     return presentOrder(order);
+  });
+
+  app.post("/v1/orders/:id/cancel", async (req, reply) => {
+    const auth = await requireMerchant(req, reply, { roles: STORE_ADMIN_ROLES });
+    if (!auth) return;
+    const { id } = z.object({ id: z.string() }).parse(req.params);
+    const body = z.object({ reason: z.string().trim().min(3).max(300) }).parse(req.body);
+    const order = await cancelOrderByMerchant({ tenantId: auth.tenantId, staffId: auth.staffId, orderId: id, reason: body.reason });
+    return presentOrder(order, { forMerchant: true });
   });
 
   app.post("/v1/checkout/pay", async (req, reply) => {

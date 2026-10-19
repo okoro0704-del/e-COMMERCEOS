@@ -12,6 +12,7 @@ import {
   productionSafetyWarnings,
   type SafetyConfig,
 } from "../../apps/ecommerceos-api/src/lib/production-safety.ts";
+import { originAllowed, unsafeProductionOrigins } from "../../apps/ecommerceos-api/src/lib/cors.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const STRONG_TOKEN = "t".repeat(48);
@@ -47,6 +48,44 @@ test("a missing or development internal token is refused in production", () => {
       `token ${JSON.stringify(token)}`,
     );
   }
+});
+
+test("a platform admin token, when set, must be strong and not the Portal service token", () => {
+  assert.deepEqual(productionSafetyIssues({ ...safeProduction, platformAdminToken: "p".repeat(40) }), []);
+  for (const platformAdminToken of ["short-token", "dev-primitives-token", STRONG_TOKEN]) {
+    const issues = productionSafetyIssues({ ...safeProduction, platformAdminToken });
+    assert.deepEqual(issues.map((i) => i.key), ["ECO_PLATFORM_ADMIN_TOKEN"], platformAdminToken);
+  }
+});
+
+test("production CORS allows only the origins it names", () => {
+  const allowed = ["https://e-commerce.getlifeos.app", "https://*.getlifeos.app"];
+  for (const origin of ["https://e-commerce.getlifeos.app", "https://store-1.getlifeos.app"]) {
+    assert.equal(originAllowed(origin, allowed, "production"), true, origin);
+  }
+  for (const origin of [
+    "https://attacker.netlify.app",
+    "http://store-1.getlifeos.app",
+    "https://getlifeos.app.attacker.example",
+    "https://attackergetlifeos.app",
+    "https://store-1.getlifeos.app:8443",
+    "http://localhost:5190",
+    "not a url",
+  ]) {
+    assert.equal(originAllowed(origin, allowed, "production"), false, origin);
+  }
+  assert.equal(originAllowed("https://anything.example", ["*"], "production"), false, "no wildcard in production");
+  assert.equal(originAllowed("https://anything.example", ["*"], "development"), true);
+  assert.equal(originAllowed("http://localhost:5173", [], "development"), true, "local development needs no list");
+});
+
+test("unsafe CORS_ORIGINS entries block a production boot", () => {
+  assert.deepEqual(
+    unsafeProductionOrigins(["*", "https://*.netlify.app", "http://shop.example", "http://localhost:5190", "https://e-commerce.getlifeos.app", "https://*.getlifeos.app", "https://ecommerceos-staging-052577.netlify.app"]),
+    ["*", "https://*.netlify.app", "http://shop.example", "http://localhost:5190"],
+  );
+  const issues = productionSafetyIssues({ ...safeProduction, corsOrigins: ["*"] });
+  assert.deepEqual(issues.map((i) => i.key), ["CORS_ORIGINS"]);
 });
 
 test("non-production environments are not blocked", () => {
@@ -93,7 +132,17 @@ test("the API refuses to boot in production without an internal token", () => {
   assert.match(run.stderr, /INTERNAL_PROVISION_TOKEN/);
 });
 
+test("the API refuses to boot in production with wildcard CORS", () => {
+  const run = bootInProduction({ INTERNAL_PROVISION_TOKEN: STRONG_TOKEN, CORS_ORIGINS: "*" });
+  assert.equal(run.status, 3, run.stderr);
+  assert.match(run.stderr, /CORS_ORIGINS/);
+});
+
 test("the API boots in production with a safe config", () => {
-  const run = bootInProduction({ INTERNAL_PROVISION_TOKEN: STRONG_TOKEN, DATABASE_URL: "file:./unused.db" });
+  const run = bootInProduction({
+    INTERNAL_PROVISION_TOKEN: STRONG_TOKEN,
+    DATABASE_URL: "file:./unused.db",
+    CORS_ORIGINS: "https://e-commerce.getlifeos.app",
+  });
   assert.equal(run.status, 0, run.stderr);
 });

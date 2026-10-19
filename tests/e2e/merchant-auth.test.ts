@@ -110,6 +110,24 @@ function bearer(token: string) {
   return { authorization: `Bearer ${token}` };
 }
 
+test("browsers on an allowed origin may send every method the web app uses; others get no CORS grant", async () => {
+  for (const method of ["PATCH", "PUT", "DELETE"]) {
+    const res = await app.inject({
+      method: "OPTIONS",
+      url: "/v1/variants/any",
+      headers: { origin: "http://localhost:5190", "access-control-request-method": method },
+    });
+    assert.equal(res.headers["access-control-allow-origin"], "http://localhost:5190");
+    assert.match(String(res.headers["access-control-allow-methods"]), new RegExp(`\\b${method}\\b`), method);
+  }
+  const stranger = await app.inject({
+    method: "OPTIONS",
+    url: "/v1/variants/any",
+    headers: { origin: "https://attacker.netlify.app", "access-control-request-method": "PATCH" },
+  });
+  assert.equal(stranger.headers["access-control-allow-origin"], undefined);
+});
+
 test("sign-in is scoped to the store handle", async () => {
   const email = "shared-owner@example.com";
   const a = handle("scope-a");
@@ -283,6 +301,112 @@ test("Portal handoff opens the owner's store once, then lets the owner set a pas
   });
   assert.equal(reuse.statusCode, 400, "reset grant is single use");
   assert.equal((await login(email, GOOD_PASSWORD, sub)).statusCode, 200);
+});
+
+/** Opens the store admin through a Portal handoff and returns the session and its reset grant. */
+async function openFromPortal(subdomain: string, ownerSubject: string) {
+  const issued = await app.inject({
+    method: "POST",
+    url: "/internal/ecommerceos/admin-handoff",
+    headers: SERVICE,
+    payload: { subdomain, ownerSubject },
+  });
+  assert.equal(issued.statusCode, 201, issued.body);
+  const code = decodeURIComponent((issued.json().url as string).split("#handoff=")[1]!);
+  const exchanged = await app.inject({ method: "POST", url: "/v1/auth/merchant/handoff/exchange", payload: { code } });
+  assert.equal(exchanged.statusCode, 200, exchanged.body);
+  return exchanged.json() as { token: string; resetGrant: string };
+}
+
+function setPassword(session: { token: string; resetGrant: string }, newPassword: string) {
+  return app.inject({
+    method: "POST",
+    url: "/v1/auth/merchant/password",
+    headers: bearer(session.token),
+    payload: { resetGrant: session.resetGrant, newPassword },
+  });
+}
+
+test("a refused new password leaves the reset grant usable, and the grant then works exactly once", async () => {
+  const sub = handle("reset-refused");
+  const email = `owner@${sub}.example`;
+  const subject = "local:reset-refused-owner";
+  assert.equal((await provision({ subdomain: sub, email, ownerSubject: subject })).statusCode, 201);
+  const first = await openFromPortal(sub, subject);
+
+  // Each refusal names the password problem and spends nothing.
+  for (const refused of [LEAKED_PASSWORD, "short-pw", "Owner-Lantern-Passw0rd"]) {
+    const res = await setPassword(first, refused);
+    assert.equal(res.statusCode, 400, res.body);
+    assert.equal(res.json().error, "weak_password", refused);
+  }
+  assert.equal((await setPassword(first, GOOD_PASSWORD)).statusCode, 200, "the same grant still sets a good password");
+  assert.equal((await login(email, GOOD_PASSWORD, sub)).statusCode, 200);
+
+  const replay = await setPassword(first, "Another-Passw0rd-2026");
+  assert.equal(replay.statusCode, 400, replay.body);
+  assert.equal(replay.json().error, "invalid_reset_grant", "a used grant never works again");
+
+  // Choosing the current password again is refused without spending the next grant.
+  const second = await openFromPortal(sub, subject);
+  const same = await setPassword(second, GOOD_PASSWORD);
+  assert.equal(same.statusCode, 400, same.body);
+  assert.equal(same.json().error, "weak_password");
+  assert.equal((await setPassword(second, "Copper-Meadow-Passw0rd-27")).statusCode, 200);
+  assert.equal((await login(email, "Copper-Meadow-Passw0rd-27", sub)).statusCode, 200);
+  assert.equal((await login(email, GOOD_PASSWORD, sub)).statusCode, 401);
+
+  const tenantId = (await prisma.tenant.findUnique({ where: { slug: sub } }))!.id;
+  assert.equal(await prisma.auditLog.count({ where: { tenantId, action: "staff.password_change" } }), 2);
+});
+
+test("an expired reset grant, or one belonging to another account, is refused and not spent", async () => {
+  const { hashToken } = await import("../../apps/ecommerceos-api/src/lib/crypto.ts");
+  const subA = handle("reset-a");
+  const subB = handle("reset-b");
+  assert.equal((await provision({ subdomain: subA, email: `owner@${subA}.example`, ownerSubject: "local:reset-a" })).statusCode, 201);
+  assert.equal((await provision({ subdomain: subB, email: `owner@${subB}.example`, ownerSubject: "local:reset-b" })).statusCode, 201);
+  const a = await openFromPortal(subA, "local:reset-a");
+  const b = await openFromPortal(subB, "local:reset-b");
+
+  // Owner B presents owner A's grant: refused, and A's grant is not burned.
+  const crossed = await setPassword({ token: b.token, resetGrant: a.resetGrant }, GOOD_PASSWORD);
+  assert.equal(crossed.statusCode, 400, crossed.body);
+  assert.equal(crossed.json().error, "invalid_reset_grant");
+  assert.equal((await setPassword(a, GOOD_PASSWORD)).statusCode, 200, "A's grant survives another account's attempt");
+
+  // An expired grant is refused.
+  await prisma.staffSession.update({
+    where: { tokenHash: hashToken(`reset:${b.resetGrant}`) },
+    data: { expiresAt: new Date(Date.now() - 1000) },
+  });
+  const expired = await setPassword(b, GOOD_PASSWORD);
+  assert.equal(expired.statusCode, 400, expired.body);
+  assert.equal(expired.json().error, "invalid_reset_grant");
+  assert.equal((await login(`owner@${subB}.example`, GOOD_PASSWORD, subB)).statusCode, 401);
+});
+
+test("concurrent uses of one reset grant set exactly one password", async () => {
+  const sub = handle("reset-race");
+  const email = `owner@${sub}.example`;
+  const subject = "local:reset-race-owner";
+  assert.equal((await provision({ subdomain: sub, email, ownerSubject: subject })).statusCode, 201);
+  const session = await openFromPortal(sub, subject);
+
+  const candidates = Array.from({ length: 8 }, (_, i) => `Racing-Lantern-Passw0rd-${i}${i}`);
+  const results = await Promise.all(candidates.map((pw) => setPassword(session, pw)));
+  const winners = candidates.filter((_, i) => results[i]!.statusCode === 200);
+  assert.equal(winners.length, 1, `statuses ${results.map((r) => r.statusCode).join(",")}`);
+  for (const res of results.filter((r) => r.statusCode !== 200)) {
+    assert.equal(res.statusCode, 400, res.body);
+    assert.equal(res.json().error, "invalid_reset_grant");
+  }
+  assert.equal((await login(email, winners[0]!, sub)).statusCode, 200, "the winning password is the one stored");
+  for (const loser of candidates.filter((c) => c !== winners[0])) {
+    assert.equal((await login(email, loser, sub)).statusCode, 401);
+  }
+  const tenantId = (await prisma.tenant.findUnique({ where: { slug: sub } }))!.id;
+  assert.equal(await prisma.auditLog.count({ where: { tenantId, action: "staff.password_change" } }), 1);
 });
 
 test("a legacy store is claimed once by its owner email, then only by that Portal identity", async () => {

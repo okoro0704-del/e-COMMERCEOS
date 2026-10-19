@@ -3,6 +3,7 @@ import { registerInternalProvisionRoutes } from "./routes/internal/provision.js"
 import { registerLogisticsWebhookRoutes } from "./routes/internal/logistics-webhook.js";
 import { registerInternalJobRoutes } from "./routes/internal/jobs.js";
 import { registerAdminHandoffRoutes } from "./routes/internal/admin-handoff.js";
+import { registerPlatformOperatorRoutes } from "./routes/internal/platform-operators.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerProductRoutes } from "./routes/products.js";
 import { registerInventoryRoutes } from "./routes/inventory.js";
@@ -12,6 +13,9 @@ import { registerOrderRoutes } from "./routes/orders.js";
 import { registerDigiPediaRoutes } from "./routes/digipedia.js";
 import { registerLifeOsPublicRoutes } from "./routes/lifeos-public.js";
 import { registerBusinessPublicationRoutes } from "./routes/business-publications.js";
+import { registerActivationRoutes } from "./routes/activation.js";
+import { registerPlatformRoutes } from "./routes/platform.js";
+import { registerStoreSettingsRoutes } from "./routes/store-settings.js";
 import { config } from "./config.js";
 import { assertLifeOsPrimitivesReady, getLifeOsPrimitives } from "./services/lifeos/container.js";
 import { onlinePaymentAvailability } from "./services/checkout.js";
@@ -21,6 +25,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await registerLogisticsWebhookRoutes(app);
   await registerInternalJobRoutes(app);
   await registerAdminHandoffRoutes(app);
+  await registerPlatformOperatorRoutes(app);
   await registerAuthRoutes(app);
   await registerProductRoutes(app);
   await registerInventoryRoutes(app);
@@ -30,6 +35,9 @@ export async function registerRoutes(app: FastifyInstance) {
   await registerDigiPediaRoutes(app);
   await registerLifeOsPublicRoutes(app);
   await registerBusinessPublicationRoutes(app);
+  await registerActivationRoutes(app);
+  await registerPlatformRoutes(app);
+  await registerStoreSettingsRoutes(app);
 
   app.get("/health", async () => ({
     status: "ok" as const,

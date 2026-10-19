@@ -62,15 +62,19 @@ function sessionResponse(token: string, expiresAt: Date, staff: StaffWithTenant)
   };
 }
 
-/** Consume a one-time grant row: valid, unexpired and not yet used, exactly once. */
-async function consumeGrant(prefix: string, secret: string) {
+/**
+ * Consume a one-time grant row: valid, unexpired and not yet used, exactly once. When the grant
+ * must belong to a given staff member, anyone else presenting it neither uses nor burns it.
+ */
+async function consumeGrant(prefix: string, secret: string, expectedStaffId?: string) {
   const row = await prisma.staffSession.findUnique({
     where: { tokenHash: hashToken(`${prefix}${secret}`) },
     include: { staff: { include: { tenant: true } } },
   });
   if (!row || row.revokedAt || row.expiresAt < new Date() || row.staff.status !== "active") return null;
+  if (expectedStaffId && row.staffId !== expectedStaffId) return null;
   const used = await prisma.staffSession.updateMany({
-    where: { id: row.id, revokedAt: null },
+    where: { id: row.id, revokedAt: null, expiresAt: { gt: new Date() } },
     data: { revokedAt: new Date() },
   });
   return used.count === 1 ? row : null;
@@ -141,9 +145,18 @@ export async function changeStaffPassword(opts: {
   const staff = await prisma.staffMember.findUnique({ where: { id: opts.staffId } });
   if (!staff || staff.status !== "active") throw httpError(401, "unauthorized", "Merchant session required");
 
+  const refusal =
+    passwordProblem(opts.newPassword, staff.email) ??
+    (isPasswordSet(staff.passwordHash) && verifyPassword(opts.newPassword, staff.passwordHash)
+      ? "Choose a password different from the current one."
+      : null);
+
   if (opts.resetGrant) {
-    const grant = await consumeGrant(RESET_PREFIX, opts.resetGrant);
-    if (!grant || grant.staffId !== staff.id) {
+    // Refuse the new password before spending the single-use grant: a rejected choice must not
+    // send the owner back to LifeOS Portal for a new handoff.
+    if (refusal) throw httpError(400, "weak_password", refusal);
+    const grant = await consumeGrant(RESET_PREFIX, opts.resetGrant, staff.id);
+    if (!grant) {
       throw httpError(400, "invalid_reset_grant", "This reset link has expired. Open your store admin from LifeOS Portal again.");
     }
   } else if (isPasswordSet(staff.passwordHash)) {
@@ -152,11 +165,7 @@ export async function changeStaffPassword(opts: {
     }
   }
 
-  const problem = passwordProblem(opts.newPassword, staff.email);
-  if (problem) throw httpError(400, "weak_password", problem);
-  if (isPasswordSet(staff.passwordHash) && verifyPassword(opts.newPassword, staff.passwordHash)) {
-    throw httpError(400, "weak_password", "Choose a password different from the current one.");
-  }
+  if (refusal) throw httpError(400, "weak_password", refusal);
 
   await prisma.$transaction([
     prisma.staffMember.update({ where: { id: staff.id }, data: { passwordHash: hashPassword(opts.newPassword) } }),

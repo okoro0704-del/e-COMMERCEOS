@@ -221,3 +221,78 @@ test("supermarket and shopping centre presets seed distinct operating models", a
   assert.ok((centreSettings.destinationOccupants?.length ?? 0) >= 1);
 });
 
+
+function provisionAs(subdomain: string, ownerSubject: string) {
+  return app.inject({
+    method: "POST",
+    url: "/internal/distributor/provision",
+    headers: { authorization: "Bearer portal-e2e-token" },
+    payload: {
+      tenantId: `tid_${subdomain}`,
+      subdomain,
+      displayName: "Retry Market",
+      seed: "default",
+      adminStaff: { email: `owner@${subdomain}.example`, displayName: "Owner" },
+      owner: { subject: ownerSubject },
+    },
+  });
+}
+
+test("a failed provisioning keeps nothing, says so without internals, and the same request can be retried", async () => {
+  const subdomain = `retry-${Date.now().toString(36)}`;
+  // Force the store-config step to fail: another store already holds this storefront handle.
+  const blocker = await prisma.tenant.create({ data: { slug: `blocker-${subdomain}`, name: "Blocker", settings: {} } });
+  await prisma.storeConfig.create({
+    data: {
+      tenantId: blocker.id,
+      storeName: "Blocker",
+      subdomain,
+      pickupAddressLine1: "1 Test Road",
+      pickupCity: "Lagos",
+      pickupCountry: "NG",
+      pickupLat: 6.45,
+      pickupLng: 3.39,
+    },
+  });
+
+  const failed = await provisionAs(subdomain, "local:retry-owner");
+  assert.equal(failed.statusCode, 500, failed.body);
+  assert.equal(failed.json().error, "provision_failed");
+  assert.doesNotMatch(failed.body, /prisma|\.ts|invocation|Unique constraint/i, "no internal details");
+  assert.ok(failed.json().requestId);
+  assert.equal(await prisma.tenant.count({ where: { slug: subdomain } }), 0, "the half-created store was removed");
+
+  await prisma.tenant.delete({ where: { id: blocker.id } });
+  const retried = await provisionAs(subdomain, "local:retry-owner");
+  assert.equal(retried.statusCode, 201, retried.body);
+  const replayed = await provisionAs(subdomain, "local:retry-owner");
+  assert.equal(replayed.statusCode, 200, "a repeat by the same owner is a replay");
+  assert.equal(replayed.json().replayed, true);
+  assert.equal(replayed.json().tenantId, retried.json().tenantId);
+  const stranger = await provisionAs(subdomain, "local:someone-else");
+  assert.equal(stranger.statusCode, 409, stranger.body);
+});
+
+test("Portal can poll a store's provisioning and activation status with the service token", async () => {
+  const subdomain = `status-${Date.now().toString(36)}`;
+  assert.equal((await provisionAs(subdomain, "local:status-owner")).statusCode, 201);
+  const noToken = await app.inject({ method: "GET", url: `/internal/ecommerceos/stores/${subdomain}` });
+  assert.equal(noToken.statusCode, 401);
+  const res = await app.inject({
+    method: "GET",
+    url: `/internal/ecommerceos/stores/${subdomain}`,
+    headers: { authorization: "Bearer portal-e2e-token" },
+  });
+  assert.equal(res.statusCode, 200, res.body);
+  const body = res.json();
+  assert.equal(body.subdomain, subdomain);
+  assert.equal(body.provisioned, true);
+  assert.equal(body.ownerBound, true);
+  assert.deepEqual(body.activation, { required: false, status: "legacy", storeOpen: true });
+  const missing = await app.inject({
+    method: "GET",
+    url: "/internal/ecommerceos/stores/no-such-store",
+    headers: { authorization: "Bearer portal-e2e-token" },
+  });
+  assert.equal(missing.statusCode, 404);
+});

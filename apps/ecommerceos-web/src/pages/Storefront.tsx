@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { loadMarketplaceCatalog, loadMarketplaceStores, loadStorefront, searchMarketplace } from "../lib/api";
+import { loadMarketplaceCatalog, loadMarketplaceStores, loadStorefront, publicMediaUrl, searchMarketplace } from "../lib/api";
 import { formatMoney } from "../lib/money";
 import type { MarketplaceProjectedProduct, MarketplaceStore, Product, Storefront as Store } from "../lib/types";
 
@@ -45,6 +45,18 @@ export function StorefrontPage() {
 
   if (error) return <p className="empty">This store is unavailable right now. {error}</p>;
   if (!store) return <p className="empty">Loading store…</p>;
+  const brandStyle = store.primaryColor ? { background: `linear-gradient(135deg, ${store.primaryColor} 0%, #12343a 100%)` } : undefined;
+  const logo = store.logoAssetId ? publicMediaUrl(store.logoAssetId) : store.logoUrl?.startsWith("https://") ? store.logoUrl : null;
+  if (store.activation?.open === false) {
+    return (
+      <section className="hero" style={brandStyle}>
+        {logo ? <img className="store-logo" src={logo} alt="" /> : null}
+        <p className="badge">{store.subdomain}.getlifeos.app</p>
+        <h1>{store.storeName}</h1>
+        <p>This store is getting ready and will open soon.</p>
+      </section>
+    );
+  }
 
   const model = store.operatingModel ?? "store";
   const occupants = store.destinationOccupants ?? [];
@@ -77,11 +89,13 @@ export function StorefrontPage() {
           Preview catalog only. This is not a real store and checkout is disabled.
         </div>
       ) : null}
-      <section className="hero">
+      <section className="hero" style={brandStyle}>
+        {logo ? <img className="store-logo" src={logo} alt="" /> : null}
         <p className="badge">
           {marketplace ? "Online Marketplace" : store.verticalId ?? "retail"} · {store.subdomain}.getlifeos.app
         </p>
         <h1>{store.storeName}</h1>
+        {store.tagline ? <p className="tagline">{store.tagline}</p> : null}
         <p>
           {marketplace
             ? "Shop independent Online Stores. Each seller keeps their own catalogue — this marketplace only discovers it."

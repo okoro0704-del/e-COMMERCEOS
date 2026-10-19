@@ -60,5 +60,25 @@ export const config = {
    * refused in production because this build has no verified payment provider integration.
    */
   protectedCheckoutEnabled: process.env.ECO_PROTECTED_CHECKOUT_ENABLED === "true",
+  /**
+   * Paid brand setup. When required, stores provisioned from now on stay closed to buyers until
+   * platform staff verify their setup payment; stores created earlier are grandfathered.
+   */
+  activationRequired: process.env.ECO_ACTIVATION_REQUIRED === "true",
+  /** Shown to owners with the setup fee: how to pay outside the platform. Empty until approved. */
+  setupPaymentInstructions: process.env.ECO_SETUP_PAYMENT_INSTRUCTIONS ?? "",
+  /** Early-adopter setup price. Off until Digiconomy confirms eligibility, amount and currency. */
+  earlyAdopter: {
+    enabled: process.env.ECO_EARLY_ADOPTER_ENABLED === "true",
+    amountMinor: Number(process.env.ECO_EARLY_ADOPTER_AMOUNT_MINOR ?? 2000),
+    currency: (process.env.ECO_EARLY_ADOPTER_CURRENCY ?? "USD").trim().toUpperCase(),
+    /** ISO date after which the offer ends; empty for no end date. */
+    until: process.env.ECO_EARLY_ADOPTER_UNTIL ?? "",
+    /** Most verified early-adopter activations; 0 for no limit. */
+    limit: Number(process.env.ECO_EARLY_ADOPTER_LIMIT ?? 0),
+  },
+  /** Bootstraps platform operators. Unset disables the route; never the Portal service token. */
+  platformAdminToken: process.env.ECO_PLATFORM_ADMIN_TOKEN ?? "",
+  platformSessionTtlHours: 8,
   version: "0.1.0",
 };

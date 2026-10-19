@@ -3,6 +3,8 @@ import { z } from "zod";
 import { timingSafeEqual } from "node:crypto";
 import { config } from "../../config.js";
 import { provisionEcommerceTenant } from "../../services/distributor/provision-tenant.js";
+import { storeOpenForBuyers } from "../../services/activation.js";
+import { prisma } from "../../db.js";
 
 function bearerEquals(provided: string, expected: string): boolean {
   const a = Buffer.from(provided);
@@ -119,10 +121,42 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
       return reply.code("replayed" in result ? 200 : 201).send(result);
     } catch (err) {
       const e = err as { statusCode?: number; code?: string; message?: string };
-      return reply.code(e.statusCode ?? 500).send({
-        error: e.code ?? "provision_failed",
-        message: e.message ?? "Provision failed",
-      });
+      if (!e.statusCode || e.statusCode >= 500) {
+        // Internal details stay in the log; nothing of a failed attempt is kept, so a retry is safe.
+        req.log.error({ err }, "provisioning failed");
+        return reply.code(500).send({
+          error: "provision_failed",
+          message: "Provisioning failed and nothing was kept. Retry the same request.",
+          requestId: req.id,
+        });
+      }
+      return reply.code(e.statusCode).send({ error: e.code ?? "provision_failed", message: e.message ?? "Provision failed" });
     }
+  });
+
+  /** Provisioning and activation status of one store, for LifeOS Portal to poll. */
+  app.get("/internal/ecommerceos/stores/:subdomain", async (req, reply) => {
+    if (!requireInternalToken(req.headers.authorization)) {
+      return reply.code(401).send({ error: "unauthorized", message: "Valid service bearer token required" });
+    }
+    const { subdomain } = z.object({ subdomain: z.string().min(1).max(100) }).parse(req.params);
+    const tenant = await prisma.tenant.findUnique({
+      where: { slug: subdomain.trim().toLowerCase() },
+      include: { storeConfig: true, staff: { where: { role: "owner", status: "active" } } },
+    });
+    if (!tenant) return reply.code(404).send({ error: "not_found", message: "Store not found" });
+    return {
+      tenantId: tenant.id,
+      subdomain: tenant.slug,
+      status: tenant.status,
+      provisioned: Boolean(tenant.storeConfig),
+      ownerBound: tenant.staff.some((s) => Boolean(s.trustId)),
+      activation: {
+        required: config.activationRequired,
+        status: tenant.activationStatus,
+        storeOpen: await storeOpenForBuyers(tenant.id),
+      },
+      createdAt: tenant.createdAt.toISOString(),
+    };
   });
 }
