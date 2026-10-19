@@ -1197,6 +1197,7 @@ function ActivationAdmin({ token, isOwner }: { token: string; isOwner: boolean }
                 <th>Setup</th>
                 <th>Reference</th>
                 <th>Referral</th>
+                <th>Draft documents</th>
                 <th>Status</th>
               </tr>
             </thead>
@@ -1206,11 +1207,11 @@ function ActivationAdmin({ token, isOwner }: { token: string; isOwner: boolean }
                   <td>{new Date(s.submittedAt).toLocaleDateString()}</td>
                   <td>{formatMoney(s.amountMinor, s.currency)}</td>
                   <td>{s.paymentReference}</td>
+                  <td>{s.partner?.code ?? "—"}</td>
                   <td>
-                    {s.partner?.code ?? "—"}
                     {(s.documents ?? []).map((d) => (
                       <div key={d.number} className="muted small">
-                        Draft {d.kind} {d.number}
+                        {d.kind === "invoice" ? "Invoice" : "Receipt"} {d.number}
                         {d.status === "void" ? " (void)" : ""}
                       </div>
                     ))}
