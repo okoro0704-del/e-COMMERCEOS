@@ -30,6 +30,9 @@ export async function buildApp() {
       if (!origin) return cb(null, true);
       return cb(null, originAllowed(origin, config.corsOrigins, config.env));
     },
+    // The plugin's default is GET,HEAD,POST, which blocked the web app's cart, catalogue,
+    // marketplace and DigiPedia updates from the browser.
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
     credentials: true,
   });
 

@@ -110,6 +110,24 @@ function bearer(token: string) {
   return { authorization: `Bearer ${token}` };
 }
 
+test("browsers on an allowed origin may send every method the web app uses; others get no CORS grant", async () => {
+  for (const method of ["PATCH", "PUT", "DELETE"]) {
+    const res = await app.inject({
+      method: "OPTIONS",
+      url: "/v1/variants/any",
+      headers: { origin: "http://localhost:5190", "access-control-request-method": method },
+    });
+    assert.equal(res.headers["access-control-allow-origin"], "http://localhost:5190");
+    assert.match(String(res.headers["access-control-allow-methods"]), new RegExp(`\\b${method}\\b`), method);
+  }
+  const stranger = await app.inject({
+    method: "OPTIONS",
+    url: "/v1/variants/any",
+    headers: { origin: "https://attacker.netlify.app", "access-control-request-method": "PATCH" },
+  });
+  assert.equal(stranger.headers["access-control-allow-origin"], undefined);
+});
+
 test("sign-in is scoped to the store handle", async () => {
   const email = "shared-owner@example.com";
   const a = handle("scope-a");
