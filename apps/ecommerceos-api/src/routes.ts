@@ -15,6 +15,7 @@ import { registerLifeOsPublicRoutes } from "./routes/lifeos-public.js";
 import { registerBusinessPublicationRoutes } from "./routes/business-publications.js";
 import { registerActivationRoutes } from "./routes/activation.js";
 import { registerPlatformRoutes } from "./routes/platform.js";
+import { registerStoreSettingsRoutes } from "./routes/store-settings.js";
 import { config } from "./config.js";
 import { assertLifeOsPrimitivesReady, getLifeOsPrimitives } from "./services/lifeos/container.js";
 import { onlinePaymentAvailability } from "./services/checkout.js";
@@ -36,6 +37,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await registerBusinessPublicationRoutes(app);
   await registerActivationRoutes(app);
   await registerPlatformRoutes(app);
+  await registerStoreSettingsRoutes(app);
 
   app.get("/health", async () => ({
     status: "ok" as const,

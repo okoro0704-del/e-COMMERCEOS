@@ -5,6 +5,7 @@ import { httpError } from "../lib/crypto.js";
 import { getOrCreateOpenCart, serializeCart } from "./cart.js";
 import { reserveInventory, releaseReservation } from "./inventory.js";
 import { getJobsProvider } from "./lifeos/container.js";
+import { writeAudit } from "../lib/audit.js";
 import type { Prisma } from "@prisma/client";
 
 export type PlaceOrderInput = {
@@ -168,7 +169,7 @@ export async function appendOrderEvent(
   });
 }
 
-export async function cancelUnpaidOrder(orderId: string, reason = "unpaid_timeout") {
+export async function cancelUnpaidOrder(orderId: string, reason = "unpaid_timeout", source = "platform-jobs") {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
     include: { items: true },
@@ -176,20 +177,22 @@ export async function cancelUnpaidOrder(orderId: string, reason = "unpaid_timeou
   if (!order) return { skipped: true, reason: "not_found" };
   if (order.status !== "PENDING_PAYMENT") return { skipped: true, reason: "not_pending", status: order.status };
 
-  await prisma.$transaction(async (tx) => {
-    await tx.order.update({
-      where: { id: order.id },
+  // Conditional: of a concurrent sweep, merchant cancel or payment, one wins and stock is released once.
+  const cancelled = await prisma.$transaction(async (tx) => {
+    const claimed = await tx.order.updateMany({
+      where: { id: order.id, status: "PENDING_PAYMENT" },
       data: {
         status: "CANCELLED",
         cancelledAt: new Date(),
         cancelReason: reason,
       },
     });
+    if (claimed.count !== 1) return false;
     await appendOrderEvent(tx, {
       orderId: order.id,
       fromStatus: "PENDING_PAYMENT",
       toStatus: "CANCELLED",
-      source: "platform-jobs",
+      source,
       payload: { reason },
     });
     for (const item of order.items) {
@@ -200,9 +203,31 @@ export async function cancelUnpaidOrder(orderId: string, reason = "unpaid_timeou
         reference: order.id,
       });
     }
+    return true;
   });
+  if (!cancelled) return { skipped: true, reason: "not_pending" };
 
   return { skipped: false, orderId: order.id, status: "CANCELLED" as const };
+}
+
+/** A store admin cancels an order that was never paid; paid or fulfilled orders are not touched here. */
+export async function cancelOrderByMerchant(opts: { tenantId: string; staffId: string; orderId: string; reason: string }) {
+  const order = await getOrder(opts.tenantId, opts.orderId);
+  if (order.status !== "PENDING_PAYMENT") {
+    throw httpError(409, "not_cancellable", "Only orders awaiting payment can be cancelled here.");
+  }
+  const result = await cancelUnpaidOrder(order.id, `merchant: ${opts.reason}`, "merchant");
+  if (result.skipped) throw httpError(409, "not_cancellable", "This order changed before it could be cancelled.");
+  await writeAudit({
+    tenantId: opts.tenantId,
+    actorKind: "merchant",
+    actorId: opts.staffId,
+    action: "order.cancelled",
+    resource: "order",
+    resourceId: order.id,
+    metadata: { reason: opts.reason },
+  });
+  return getOrder(opts.tenantId, order.id);
 }
 
 export async function sweepUnpaidOrders(now = new Date()) {
