@@ -13,6 +13,7 @@ import {
   projectMarketplaceStores,
 } from "../services/multi-merchant.js";
 import { assertStoreOpen, storeOpenForBuyers } from "../services/activation.js";
+import { acceptedPaymentMethods } from "../services/offline-checkout.js";
 import { prisma } from "../db.js";
 
 export async function registerStorefrontRoutes(app: FastifyInstance) {
@@ -62,6 +63,7 @@ export async function registerStorefrontRoutes(app: FastifyInstance) {
       wholesale: settings.wholesale ?? null,
       checkout: {
         onlinePayment: onlinePaymentAvailability().available,
+        methods: acceptedPaymentMethods(store),
       },
       // A store awaiting its verified setup payment shows its name but no catalogue or checkout.
       activation: { open: await storeOpenForBuyers(tenantId) },

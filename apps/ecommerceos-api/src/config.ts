@@ -80,5 +80,11 @@ export const config = {
   /** Bootstraps platform operators. Unset disables the route; never the Portal service token. */
   platformAdminToken: process.env.ECO_PLATFORM_ADMIN_TOKEN ?? "",
   platformSessionTtlHours: 8,
+  /** Operator sessions also end after this long without activity. */
+  platformIdleTimeoutMinutes: Number(process.env.ECO_PLATFORM_IDLE_MINUTES ?? 30),
+  /** Encrypts operator TOTP secrets. Unset: operator sign-in is refused (MFA cannot be enforced). */
+  operatorMfaKey: process.env.ECO_OPERATOR_MFA_KEY ?? "",
+  /** How long a bank-transfer order is held for the customer to pay before it is released. */
+  bankTransferWindowHours: Number(process.env.ECO_BANK_TRANSFER_WINDOW_HOURS ?? 48),
   version: "0.1.0",
 };

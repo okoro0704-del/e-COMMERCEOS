@@ -5,6 +5,7 @@ import { prisma } from "../db.js";
 import { requireMerchant, STORE_ADMIN_ROLES } from "../lib/auth.js";
 import { httpError } from "../lib/crypto.js";
 import { writeAudit } from "../lib/audit.js";
+import { getPaymentSettings, updatePaymentSettings } from "../services/offline-checkout.js";
 
 function settingsOf(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -29,6 +30,29 @@ export async function registerStoreSettingsRoutes(app: FastifyInstance) {
     const auth = await requireMerchant(req, reply);
     if (!auth) return;
     return readBranding(auth.tenantId);
+  });
+
+  app.get("/v1/store/payment-settings", async (req, reply) => {
+    const auth = await requireMerchant(req, reply, { roles: STORE_ADMIN_ROLES });
+    if (!auth) return;
+    return getPaymentSettings(auth.tenantId);
+  });
+
+  // Owners only: customers send money to these details.
+  app.patch("/v1/store/payment-settings", async (req, reply) => {
+    const auth = await requireMerchant(req, reply, { roles: ["owner"] });
+    if (!auth) return;
+    const body = z
+      .object({
+        payOnDeliveryEnabled: z.boolean().optional(),
+        bankTransferEnabled: z.boolean().optional(),
+        bankName: z.string().trim().max(80).nullable().optional(),
+        bankAccountName: z.string().trim().max(120).nullable().optional(),
+        bankAccountNumber: z.string().trim().max(20).nullable().optional(),
+        bankTransferNote: z.string().trim().max(300).optional(),
+      })
+      .parse(req.body);
+    return updatePaymentSettings({ tenantId: auth.tenantId, staffId: auth.staffId, patch: body });
   });
 
   app.patch("/v1/store/branding", async (req, reply) => {

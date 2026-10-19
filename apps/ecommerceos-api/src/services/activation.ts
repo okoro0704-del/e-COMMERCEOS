@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { prisma } from "../db.js";
 import { config } from "../config.js";
 import { httpError } from "../lib/crypto.js";
@@ -72,7 +73,58 @@ function normalizeReference(reference: string) {
   return reference.trim().toUpperCase().replace(/\s+/g, "");
 }
 
+type DocumentRow = {
+  kind: string;
+  number: string;
+  status: string;
+  billedToName: string;
+  amountMinor: number;
+  currency: string;
+  transactionReference: string | null;
+  taxTreatment: string;
+  taxRateBps: number | null;
+  taxAmountMinor: number | null;
+  supplierTaxId: string | null;
+  customerTaxId: string | null;
+  issuedAt: Date;
+  voidedAt: Date | null;
+  voidReason: string | null;
+};
+
+/**
+ * Draft invoice and receipt fields for the setup fee. Tax treatment stays "unreviewed" with empty
+ * rate and amount until Digiconomy decides how VAT applies; these are not final tax documents.
+ */
+export function presentDocument(d: DocumentRow) {
+  return {
+    kind: d.kind,
+    number: d.number,
+    status: d.status,
+    draft: true,
+    billedTo: d.billedToName,
+    amountMinor: d.amountMinor,
+    currency: d.currency,
+    transactionReference: d.transactionReference,
+    tax: {
+      treatment: d.taxTreatment,
+      rateBps: d.taxRateBps,
+      amountMinor: d.taxAmountMinor,
+      supplierTaxId: d.supplierTaxId,
+      customerTaxId: d.customerTaxId,
+    },
+    issuedAt: d.issuedAt.toISOString(),
+    voidedAt: d.voidedAt?.toISOString() ?? null,
+    voidReason: d.voidReason,
+  };
+}
+
+function documentNumber(kind: "invoice" | "receipt") {
+  const day = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  return `${kind === "invoice" ? "DGC-INV" : "DGC-RCT"}-${day}-${randomBytes(5).toString("hex").toUpperCase()}`;
+}
+
 type ActivationRow = Awaited<ReturnType<typeof prisma.activation.findFirstOrThrow>> & {
+  documents?: DocumentRow[];
   partner?: { code: string; name: string } | null;
   commission?: { amountMinor: number; currency: string; status: string; rateBps: number } | null;
   tenant?: { slug: string; name: string; activationStatus: string } | null;
@@ -101,8 +153,11 @@ export function presentActivation(row: ActivationRow) {
           currency: row.commission.currency,
           rateBps: row.commission.rateBps,
           status: row.commission.status,
+          // No payout process exists yet; commissions are records only.
+          payoutStatus: "disabled",
         }
       : null,
+    documents: (row.documents ?? []).map(presentDocument),
     ...(row.tenant ? { store: { tenantId: row.tenantId, slug: row.tenant.slug, name: row.tenant.name } } : {}),
   };
 }
@@ -114,7 +169,7 @@ export async function getStoreActivation(tenantId: string) {
   if (!tenant) throw httpError(404, "not_found", "Store not found");
   const submissions = await prisma.activation.findMany({
     where: { tenantId },
-    include: { partner: true, commission: true },
+    include: { partner: true, commission: true, documents: true },
     orderBy: { createdAt: "desc" },
     take: 10,
   });
@@ -175,8 +230,19 @@ export async function submitActivation(opts: {
         tenantStatusBefore: tenant.activationStatus,
         referenceKey: reference,
         pendingKey: tenant.id,
+        documents: {
+          create: {
+            tenantId: tenant.id,
+            kind: "invoice",
+            number: documentNumber("invoice"),
+            billedToName: tenant.name,
+            amountMinor: offer.amountMinor,
+            currency: offer.currency,
+            transactionReference: opts.paymentReference.trim(),
+          },
+        },
       },
-      include: { partner: true, commission: true },
+      include: { partner: true, commission: true, documents: true },
     });
   } catch (err) {
     if (isUniqueViolation(err, "referenceKey")) {
@@ -207,7 +273,7 @@ export async function listActivations(opts: { status?: string }) {
   const status = ACTIVATION_STATUSES.find((s) => s === opts.status);
   const rows = await prisma.activation.findMany({
     where: status ? { status } : {},
-    include: { partner: true, commission: true, tenant: true },
+    include: { partner: true, commission: true, tenant: true, documents: true },
     orderBy: { createdAt: status === "payment_submitted" ? "asc" : "desc" },
     take: 200,
   });
@@ -263,6 +329,18 @@ export async function verifyActivation(operator: OperatorAuth, id: string, opts:
             }),
           ]
         : []),
+      prisma.billingDocument.create({
+        data: {
+          activationId: row.id,
+          tenantId: row.tenantId,
+          kind: "receipt",
+          number: documentNumber("receipt"),
+          billedToName: (await prisma.tenant.findUniqueOrThrow({ where: { id: row.tenantId } })).name,
+          amountMinor: row.amountMinor,
+          currency: row.currency,
+          transactionReference: row.paymentReference,
+        },
+      }),
       prisma.activation.update({ where: { id }, data: { appliedAt: new Date() } }),
     ]);
   } catch (err) {
@@ -289,7 +367,7 @@ export async function verifyActivation(operator: OperatorAuth, id: string, opts:
     },
   });
   return presentActivation(
-    await prisma.activation.findUniqueOrThrow({ where: { id }, include: { partner: true, commission: true, tenant: true } }),
+    await prisma.activation.findUniqueOrThrow({ where: { id }, include: { partner: true, commission: true, tenant: true, documents: true } }),
   );
 }
 
@@ -309,6 +387,10 @@ export async function rejectActivation(operator: OperatorAuth, id: string, reaso
     },
   });
   if (rejected.count !== 1) throw httpError(409, "not_awaiting_verification", `This activation is ${row.status}.`);
+  await prisma.billingDocument.updateMany({
+    where: { activationId: id, status: "draft" },
+    data: { status: "void", voidedAt: new Date(), voidReason: "submission rejected" },
+  });
   await writeAudit({
     tenantId: row.tenantId,
     actorKind: "platform_operator",
@@ -319,7 +401,7 @@ export async function rejectActivation(operator: OperatorAuth, id: string, reaso
     metadata: { reason: reason.trim() },
   });
   return presentActivation(
-    await prisma.activation.findUniqueOrThrow({ where: { id }, include: { partner: true, commission: true, tenant: true } }),
+    await prisma.activation.findUniqueOrThrow({ where: { id }, include: { partner: true, commission: true, tenant: true, documents: true } }),
   );
 }
 
@@ -328,7 +410,12 @@ export async function rejectActivation(operator: OperatorAuth, id: string, reaso
  * the status it had before, its partner commission is reversed, and the payment reference stays
  * claimed so the same transfer cannot activate a store again.
  */
-export async function reverseActivation(operator: OperatorAuth, id: string, reason: string) {
+export async function reverseActivation(
+  operator: OperatorAuth,
+  id: string,
+  reason: string,
+  approval?: { approvalId: string; requestedById: string },
+) {
   const row = await prisma.activation.findUnique({ where: { id } });
   if (!row) throw httpError(404, "not_found", "Activation not found");
   const reversed = await prisma.activation.updateMany({
@@ -357,6 +444,10 @@ export async function reverseActivation(operator: OperatorAuth, id: string, reas
       where: { activationId: id, status: "accrued" },
       data: { status: "reversed", reversedAt: new Date() },
     }),
+    prisma.billingDocument.updateMany({
+      where: { activationId: id, status: "draft" },
+      data: { status: "void", voidedAt: new Date(), voidReason: "activation reversed" },
+    }),
   ]);
   await writeAudit({
     tenantId: row.tenantId,
@@ -365,10 +456,15 @@ export async function reverseActivation(operator: OperatorAuth, id: string, reas
     action: "activation.reversed",
     resource: "activation",
     resourceId: row.id,
-    metadata: { reason: reason.trim(), commissionsReversed: commission.count, storeStatus: row.tenantStatusBefore },
+    metadata: {
+      reason: reason.trim(),
+      commissionsReversed: commission.count,
+      storeStatus: row.tenantStatusBefore,
+      ...(approval ? { approvalId: approval.approvalId, requestedById: approval.requestedById } : {}),
+    },
   });
   return presentActivation(
-    await prisma.activation.findUniqueOrThrow({ where: { id }, include: { partner: true, commission: true, tenant: true } }),
+    await prisma.activation.findUniqueOrThrow({ where: { id }, include: { partner: true, commission: true, tenant: true, documents: true } }),
   );
 }
 
@@ -465,6 +561,7 @@ export async function listCommissions(opts: { partnerId?: string; status?: strin
       amountMinor: c.amountMinor,
       currency: c.currency,
       status: c.status,
+      payoutStatus: "disabled",
       createdAt: c.createdAt.toISOString(),
       reversedAt: c.reversedAt?.toISOString() ?? null,
     })),

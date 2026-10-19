@@ -1,7 +1,13 @@
 import { Fragment, useEffect, useState } from "react";
 import {
+  ApiError,
   addDestinationOccupant,
   adjustStock,
+  advanceOrder,
+  loadPaymentSettings,
+  rejectOrderPayment,
+  savePaymentSettings,
+  verifyOrderPayment,
   cancelMerchantOrder,
   loadBranding,
   lowStock,
@@ -39,6 +45,7 @@ import { formatMoney } from "../lib/money";
 import type {
   InventoryRow,
   MarketplaceProjectedProduct,
+  PaymentSettings,
   MerchantSession,
   Order,
   Product,
@@ -51,7 +58,7 @@ const SESSION_KEY = "eco_merchant_session";
 
 /** Never present an order as paid unless the API reports a verified payment. */
 function paymentLabel(order: Order) {
-  if (order.paymentVerified) return "Paid";
+  if (order.paymentVerified) return "Paid (confirmed by the store)";
   if (order.paymentStatus === "simulated_not_paid") return "Not paid (test payment)";
   if (order.paymentStatus === "provider_reported") return "Reported, not confirmed";
   if (order.paymentStatus === "unpaid") return "Not paid";
@@ -288,6 +295,10 @@ export function AdminPage() {
       {session && !demo ? <ActivationAdmin token={session.token} isOwner={session.staff.role === "owner"} /> : null}
 
       {session && !demo && ["owner", "admin"].includes(session.staff.role) ? <BrandingAdmin token={session.token} /> : null}
+
+      {session && !demo && ["owner", "admin"].includes(session.staff.role) ? (
+        <PaymentSettingsAdmin token={session.token} isOwner={session.staff.role === "owner"} />
+      ) : null}
 
       {session && !demo ? <DigiPediaAdmin token={session.token} /> : null}
 
@@ -554,7 +565,7 @@ export function AdminPage() {
         <OrdersAdmin
           token={session.token}
           orders={orders}
-          canCancel={["owner", "admin"].includes(session.staff.role)}
+          role={session.staff.role}
           onChanged={async () => setOrders(await merchantOrders(session.token))}
         />
       ) : (
@@ -837,6 +848,7 @@ function DigiPediaAdmin({ token }: { token: string }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState("");
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
+  const [unavailable, setUnavailable] = useState<string | null>(null);
 
   useEffect(() => {
     void loadDigiPedia(token)
@@ -845,8 +857,26 @@ function DigiPediaAdmin({ token }: { token: string }) {
         setData(next);
         setDraft(next.entry ? structuredClone(next.entry.draft) : null);
       })
-      .catch((err) => setError(err instanceof Error ? err.message : "Could not load DigiPedia."));
+      .catch((err) => {
+        // A separate service being down is not something the merchant did: show a calm notice.
+        if (err instanceof ApiError && (err.status === 503 || err.status === 0)) {
+          setUnavailable(err.status === 0 ? "DigiPedia is temporarily unavailable. Please try again later." : err.message);
+          return;
+        }
+        setError(err instanceof Error ? err.message : "Could not load DigiPedia.");
+      });
   }, [token]);
+
+  if (unavailable) {
+    return (
+      <section className="card stack">
+        <h2>DigiPedia</h2>
+        <p className="muted small" role="status">
+          {unavailable}
+        </p>
+      </section>
+    );
+  }
 
   async function run(action: string, work: () => Promise<void>) {
     setBusy(action);
@@ -1167,6 +1197,7 @@ function ActivationAdmin({ token, isOwner }: { token: string; isOwner: boolean }
                 <th>Setup</th>
                 <th>Reference</th>
                 <th>Referral</th>
+                <th>Draft documents</th>
                 <th>Status</th>
               </tr>
             </thead>
@@ -1177,6 +1208,14 @@ function ActivationAdmin({ token, isOwner }: { token: string; isOwner: boolean }
                   <td>{formatMoney(s.amountMinor, s.currency)}</td>
                   <td>{s.paymentReference}</td>
                   <td>{s.partner?.code ?? "—"}</td>
+                  <td>
+                    {(s.documents ?? []).map((d) => (
+                      <div key={d.number} className="muted small">
+                        {d.kind === "invoice" ? "Invoice" : "Receipt"} {d.number}
+                        {d.status === "void" ? " (void)" : ""}
+                      </div>
+                    ))}
+                  </td>
                   <td>
                     <span className="status">{ACTIVATION_STATUS_TEXT[s.status] ?? s.status}</span>
                     {s.rejectedReason || s.reversedReason ? (
@@ -1376,29 +1415,62 @@ function BrandingAdmin({ token }: { token: string }) {
 const ORDER_FILTERS: Array<[string, string]> = [
   ["", "All"],
   ["PENDING_PAYMENT", "Awaiting payment"],
-  ["DISPATCH_PENDING", "To dispatch"],
-  ["IN_TRANSIT", "In transit"],
+  ["CONFIRMED", "To prepare"],
+  ["IN_TRANSIT", "On the way"],
   ["DELIVERED", "Delivered"],
   ["CANCELLED", "Cancelled"],
 ];
 
-/** Orders: filter by status, open the detail, cancel orders that were never paid. */
+const PAYMENT_TEXT: Record<string, string> = {
+  awaiting_transfer: "Awaiting transfer",
+  customer_reported: "Customer says paid: check your account",
+  verified: "Transfer verified",
+  rejected: "Report rejected",
+  due_on_delivery: "Pay on delivery",
+  collected: "Cash collected",
+  void: "No payment",
+  refunded_offline: "Refunded",
+};
+
+/**
+ * Orders: filter by status, open an order, and act on it. Recording money (verifying a transfer,
+ * cash collected on delivery) is for owners and admins; any staff can mark an order dispatched.
+ */
 function OrdersAdmin({
   token,
   orders,
-  canCancel,
+  role,
   onChanged,
 }: {
   token: string;
   orders: Order[];
-  canCancel: boolean;
+  role: string;
   onChanged: () => Promise<void>;
 }) {
   const [filter, setFilter] = useState("");
   const [open, setOpen] = useState<Order | null>(null);
-  const [reason, setReason] = useState("");
+  const [input, setInput] = useState({ reason: "", amount: "", reference: "", refund: "" });
   const [error, setError] = useState<string | null>(null);
-  const visible = filter ? orders.filter((o) => o.status === filter) : orders;
+  const [busy, setBusy] = useState(false);
+  // The order being worked on stays in view after an action moves it to another status.
+  const visible = filter ? orders.filter((o) => o.status === filter || o.id === open?.id) : orders;
+  const canRecordMoney = role === "owner" || role === "admin";
+
+  async function act(work: () => Promise<Order>) {
+    setBusy(true);
+    setError(null);
+    try {
+      setOpen(await work());
+      setInput({ reason: "", amount: "", reference: "", refund: "" });
+      await onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "That did not work.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const minor = (naira: string) => Math.round(Number(naira) * 100);
 
   return (
     <section className="card stack">
@@ -1430,7 +1502,7 @@ function OrdersAdmin({
                     <td>{order.orderNumber}</td>
                     <td>{order.buyerName}</td>
                     <td className="status">{order.status}</td>
-                    <td>{paymentLabel(order)}</td>
+                    <td>{order.payment ? PAYMENT_TEXT[order.payment.status] ?? order.payment.status : paymentLabel(order)}</td>
                     <td>{formatMoney(order.totalMinor, order.currency)}</td>
                     <td>
                       <button
@@ -1438,7 +1510,7 @@ function OrdersAdmin({
                         type="button"
                         onClick={async () => {
                           setError(null);
-                          setReason("");
+                          setInput({ reason: "", amount: "", reference: "", refund: "" });
                           if (open?.id === order.id) return setOpen(null);
                           try {
                             setOpen(await merchantOrder(token, order.id));
@@ -1454,46 +1526,19 @@ function OrdersAdmin({
                   {open?.id === order.id ? (
                     <tr>
                       <td colSpan={6}>
-                        <div className="order-detail stack">
-                          <p className="small">
-                            Deliver to {open.shippingCity ?? "—"} · placed {new Date(open.createdAt).toLocaleString()}
-                          </p>
-                          <ul className="small">
-                            {(open.items ?? []).map((item) => (
-                              <li key={item.id}>
-                                {item.quantity} × {item.title} ({item.sku}) — {formatMoney(item.unitPriceMinor * item.quantity, open.currency)}
-                              </li>
-                            ))}
-                          </ul>
-                          <p className="muted small">
-                            History: {(open.events ?? []).map((ev) => ev.toStatus).join(" → ") || "—"}
-                            {open.cancelReason ? ` · ${open.cancelReason}` : ""}
-                          </p>
-                          {canCancel && open.status === "PENDING_PAYMENT" ? (
-                            <div className="row">
-                              <label>
-                                Reason to cancel
-                                <input value={reason} onChange={(e) => setReason(e.target.value)} />
-                              </label>
-                              <button
-                                className="btn ghost"
-                                type="button"
-                                disabled={reason.trim().length < 3}
-                                onClick={async () => {
-                                  setError(null);
-                                  try {
-                                    setOpen(await cancelMerchantOrder(token, open.id, reason));
-                                    await onChanged();
-                                  } catch (err) {
-                                    setError(err instanceof Error ? err.message : "Could not cancel the order.");
-                                  }
-                                }}
-                              >
-                                Cancel unpaid order
-                              </button>
-                            </div>
-                          ) : null}
-                        </div>
+                        <OrderDetail
+                          order={open}
+                          busy={busy}
+                          canRecordMoney={canRecordMoney}
+                          isOwner={role === "owner"}
+                          input={input}
+                          setInput={setInput}
+                          verify={() => act(() => verifyOrderPayment(token, open.id, minor(input.amount), input.reference || undefined))}
+                          reject={() => act(() => rejectOrderPayment(token, open.id, input.reason))}
+                          advance={(action, collected) => act(() => advanceOrder(token, open.id, action, collected))}
+                          cancel={() => act(() => cancelMerchantOrder(token, open.id, input.reason, input.refund || undefined))}
+                          minor={minor}
+                        />
                       </td>
                     </tr>
                   ) : null}
@@ -1506,6 +1551,235 @@ function OrdersAdmin({
         <p className="muted small">No orders in this view.</p>
       )}
       {error ? <p className="small" style={{ color: "var(--eco-danger)" }}>{error}</p> : null}
+    </section>
+  );
+}
+
+type DetailInput = { reason: string; amount: string; reference: string; refund: string };
+
+function OrderDetail({
+  order,
+  busy,
+  canRecordMoney,
+  isOwner,
+  input,
+  setInput,
+  verify,
+  reject,
+  advance,
+  cancel,
+  minor,
+}: {
+  order: Order;
+  busy: boolean;
+  canRecordMoney: boolean;
+  isOwner: boolean;
+  input: DetailInput;
+  setInput: (next: DetailInput) => void;
+  verify: () => void;
+  reject: () => void;
+  advance: (action: "dispatch" | "deliver" | "complete", collected?: number) => void;
+  cancel: () => void;
+  minor: (naira: string) => number;
+}) {
+  const payment = order.payment;
+  const transfer = payment?.method === "bank_transfer";
+  const awaitingTransfer = transfer && order.status === "PENDING_PAYMENT" && ["awaiting_transfer", "customer_reported"].includes(payment!.status);
+  const cashOnDelivery = payment?.method === "pay_on_delivery";
+  const paid = payment?.status === "verified";
+  const cancellable =
+    (order.status === "PENDING_PAYMENT" && payment?.status !== "customer_reported") ||
+    (Boolean(payment) && ["CONFIRMED", "IN_TRANSIT"].includes(order.status) && (!paid || isOwner));
+
+  return (
+    <div className="order-detail stack">
+      <p className="small">
+        Deliver to {order.shippingCity ?? "—"} · placed {new Date(order.createdAt).toLocaleString()}
+        {payment ? ` · ${payment.method === "bank_transfer" ? "Bank transfer" : "Pay on delivery"}` : ""}
+      </p>
+      <ul className="small">
+        {(order.items ?? []).map((item) => (
+          <li key={item.id}>
+            {item.quantity} × {item.title} ({item.sku}) — {formatMoney(item.unitPriceMinor * item.quantity, order.currency)}
+          </li>
+        ))}
+      </ul>
+      {payment?.customerReference ? (
+        <p className="small">
+          Customer reported transfer reference <strong>{payment.customerReference}</strong>
+          {payment.customerReportedAt ? ` on ${new Date(payment.customerReportedAt).toLocaleString()}` : ""}.
+        </p>
+      ) : null}
+      <p className="muted small">
+        History: {(order.events ?? []).map((ev) => ev.toStatus).join(" → ") || "—"}
+        {order.cancelReason ? ` · ${order.cancelReason}` : ""}
+      </p>
+
+      {awaitingTransfer && canRecordMoney ? (
+        <div className="stack">
+          <p className="small">
+            Check your bank account for {formatMoney(order.totalMinor, order.currency)}, then record it. A customer's message is not proof of
+            payment.
+          </p>
+          <div className="row">
+            <label>
+              Amount received (NGN)
+              <input type="number" min={0} step="0.01" value={input.amount} onChange={(e) => setInput({ ...input, amount: e.target.value })} />
+            </label>
+            <label>
+              Your bank statement reference (optional)
+              <input value={input.reference} onChange={(e) => setInput({ ...input, reference: e.target.value })} />
+            </label>
+          </div>
+          <div className="row">
+            <button className="btn" type="button" disabled={busy || !input.amount} onClick={verify}>
+              Verify transfer received
+            </button>
+            {payment?.status === "customer_reported" ? (
+              <button className="btn ghost" type="button" disabled={busy || input.reason.trim().length < 3} onClick={reject}>
+                Not received: reject report
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {order.status === "CONFIRMED" ? (
+        <button className="btn secondary" type="button" disabled={busy} onClick={() => advance("dispatch")}>
+          Mark dispatched
+        </button>
+      ) : null}
+
+      {canRecordMoney && ["CONFIRMED", "IN_TRANSIT"].includes(order.status) && payment ? (
+        cashOnDelivery ? (
+          <div className="row">
+            <label>
+              Cash collected on delivery (NGN)
+              <input type="number" min={0} step="0.01" value={input.amount} onChange={(e) => setInput({ ...input, amount: e.target.value })} />
+            </label>
+            <button className="btn" type="button" disabled={busy || !input.amount} onClick={() => advance("deliver", minor(input.amount))}>
+              Delivered and paid
+            </button>
+          </div>
+        ) : (
+          <button className="btn" type="button" disabled={busy} onClick={() => advance("deliver")}>
+            Mark delivered
+          </button>
+        )
+      ) : null}
+
+      {canRecordMoney && order.status === "DELIVERED" && payment ? (
+        <button className="btn secondary" type="button" disabled={busy} onClick={() => advance("complete")}>
+          Complete order
+        </button>
+      ) : null}
+
+      {canRecordMoney && cancellable ? (
+        <div className="row">
+          <label>
+            Reason {payment?.status === "customer_reported" ? "to reject or cancel" : "to cancel"}
+            <input value={input.reason} onChange={(e) => setInput({ ...input, reason: e.target.value })} />
+          </label>
+          {paid ? (
+            <label>
+              Refund transfer reference
+              <input value={input.refund} onChange={(e) => setInput({ ...input, refund: e.target.value })} />
+            </label>
+          ) : null}
+          <button className="btn ghost" type="button" disabled={busy || input.reason.trim().length < 3 || (paid && input.refund.trim().length < 3)} onClick={cancel}>
+            {paid ? "Cancel (refunded)" : order.status === "PENDING_PAYMENT" ? "Cancel unpaid order" : "Cancel order"}
+          </button>
+        </div>
+      ) : null}
+      {paid && !isOwner && ["CONFIRMED", "IN_TRANSIT"].includes(order.status) ? (
+        <p className="muted small">Only the store owner can cancel an order that was paid.</p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Where customers pay: pay on delivery and the store's own bank account (owners edit). */
+function PaymentSettingsAdmin({ token, isOwner }: { token: string; isOwner: boolean }) {
+  const [settings, setSettings] = useState<PaymentSettings | null>(null);
+  const [form, setForm] = useState({ payOnDeliveryEnabled: false, bankTransferEnabled: false, bankName: "", bankAccountName: "", bankAccountNumber: "", bankTransferNote: "" });
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    loadPaymentSettings(token)
+      .then((s) => {
+        setSettings(s);
+        setForm({
+          payOnDeliveryEnabled: s.payOnDeliveryEnabled,
+          bankTransferEnabled: s.bankTransferEnabled,
+          bankName: s.bankName ?? "",
+          bankAccountName: s.bankAccountName ?? "",
+          bankAccountNumber: s.bankAccountNumber ?? "",
+          bankTransferNote: s.bankTransferNote ?? "",
+        });
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "Could not load payment settings."));
+  }, [token]);
+
+  if (!settings) return error ? <p className="small" style={{ color: "var(--eco-danger)" }}>{error}</p> : null;
+
+  return (
+    <section className="card stack">
+      <h2>How customers pay</h2>
+      <p className="muted small">
+        Customers pay you directly. Digiconomy never holds the money. You confirm each bank transfer yourself before preparing the order.
+      </p>
+      <form
+        className="stack"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setBusy(true);
+          setError(null);
+          setNote(null);
+          try {
+            const saved = await savePaymentSettings(token, form);
+            setSettings(saved);
+            setNote("Saved. Your checkout shows these options now.");
+          } catch (err) {
+            setError(err instanceof Error ? err.message : "Could not save payment settings.");
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        <label style={{ flexDirection: "row", alignItems: "center", gap: "0.5rem" }}>
+          <input type="checkbox" disabled={!isOwner} checked={form.payOnDeliveryEnabled} onChange={(e) => setForm({ ...form, payOnDeliveryEnabled: e.target.checked })} />
+          Accept pay on delivery
+        </label>
+        <label style={{ flexDirection: "row", alignItems: "center", gap: "0.5rem" }}>
+          <input type="checkbox" disabled={!isOwner} checked={form.bankTransferEnabled} onChange={(e) => setForm({ ...form, bankTransferEnabled: e.target.checked })} />
+          Accept bank transfer to my account
+        </label>
+        <div className="row">
+          <label>
+            Bank name
+            <input disabled={!isOwner} value={form.bankName} onChange={(e) => setForm({ ...form, bankName: e.target.value })} />
+          </label>
+          <label>
+            Account name
+            <input disabled={!isOwner} value={form.bankAccountName} onChange={(e) => setForm({ ...form, bankAccountName: e.target.value })} />
+          </label>
+          <label>
+            Account number
+            <input disabled={!isOwner} inputMode="numeric" value={form.bankAccountNumber} onChange={(e) => setForm({ ...form, bankAccountNumber: e.target.value })} />
+          </label>
+        </div>
+        {note ? <p className="muted small" role="status">{note}</p> : null}
+        {error ? <p className="small" style={{ color: "var(--eco-danger)" }}>{error}</p> : null}
+        {isOwner ? (
+          <button className="btn secondary" type="submit" disabled={busy}>
+            {busy ? "Saving…" : "Save payment settings"}
+          </button>
+        ) : (
+          <p className="muted small">Only the store owner can change where customers pay.</p>
+        )}
+      </form>
     </section>
   );
 }

@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { prismaSchemaArgs, testDatabaseUrl } from "./test-database.ts";
+import { bootstrapAdmin, inviteAndJoin } from "./platform-operators.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const apiRoot = path.resolve(__dirname, "../../apps/ecommerceos-api");
@@ -29,6 +30,7 @@ process.env.NODE_ENV = "test";
 process.env.DATABASE_URL = testDatabaseUrl(`file:./${dbName}`);
 process.env.INTERNAL_PROVISION_TOKEN = SERVICE_TOKEN;
 process.env.ECO_PLATFORM_ADMIN_TOKEN = PLATFORM_TOKEN;
+process.env.ECO_OPERATOR_MFA_KEY = "commercial-e2e-operator-mfa-key-0123456789";
 process.env.ECO_ACTIVATION_REQUIRED = "true";
 process.env.PRIMITIVES_MODE = "local";
 process.env.LOGISTICS_MODE = "local";
@@ -39,6 +41,8 @@ let prisma: PrismaClient;
 let config: typeof import("../../apps/ecommerceos-api/src/config.ts").config;
 let verifier: string;
 let admin: string;
+/** A second admin: reversals need one admin to request and another to approve. */
+let admin2: string;
 
 type Store = { subdomain: string; tenantId: string; owner: string };
 
@@ -60,15 +64,18 @@ before(async () => {
   app = await buildApp();
   await app.ready();
   prisma = new PrismaClient();
-  verifier = await operator("verifier");
-  admin = await operator("admin");
+  const first = await bootstrapAdmin(app, prisma, PLATFORM_TOKEN, `admin-${handle("op")}@digiconomy.example`, OPERATOR_PASSWORD);
+  admin = first.token;
+  admin2 = (await inviteAndJoin(app, prisma, admin, `admin2-${handle("op")}@digiconomy.example`, "admin", OPERATOR_PASSWORD)).token;
+  verifier = (await inviteAndJoin(app, prisma, admin, `verifier-${handle("op")}@digiconomy.example`, "verifier", OPERATOR_PASSWORD)).token;
 });
 
 beforeEach(async () => {
   const { accountLoginThrottle } = await import("../../apps/ecommerceos-api/src/services/staff-auth.ts");
-  const { operatorLoginThrottle } = await import("../../apps/ecommerceos-api/src/services/platform-auth.ts");
+  const { operatorLoginThrottle, operatorMfaThrottle } = await import("../../apps/ecommerceos-api/src/services/platform-auth.ts");
   accountLoginThrottle.reset();
   operatorLoginThrottle.reset();
+  operatorMfaThrottle.reset();
 });
 
 after(async () => {
@@ -87,18 +94,6 @@ function call(method: "GET" | "POST", url: string, opts: { token?: string; paylo
     headers: { ...(opts.token ? { authorization: `Bearer ${opts.token}` } : {}), ...opts.headers },
     ...(opts.payload !== undefined ? { payload: opts.payload as object } : {}),
   });
-}
-
-async function operator(role: "verifier" | "admin") {
-  const email = `${role}-${handle("op")}@digiconomy.example`;
-  const created = await call("POST", "/internal/platform/operators", {
-    token: PLATFORM_TOKEN,
-    payload: { email, displayName: `Test ${role}`, role, password: OPERATOR_PASSWORD },
-  });
-  assert.equal(created.statusCode, 201, created.body);
-  const login = await call("POST", "/v1/platform/login", { payload: { email, password: OPERATOR_PASSWORD } });
-  assert.equal(login.statusCode, 200, login.body);
-  return login.json().token as string;
 }
 
 async function newStore(prefix: string): Promise<Store> {
@@ -185,14 +180,15 @@ async function placeOrder(store: Store, variantId: string) {
 
 const storefront = (store: Store, url = "/v1/storefront") => app.inject({ method: "GET", url, headers: { "x-store-subdomain": store.subdomain } });
 
-test("operators are created only with the platform admin token, and sessions do not cross over", async () => {
-  const body = { email: `x-${handle("op")}@digiconomy.example`, displayName: "X", role: "admin", password: OPERATOR_PASSWORD };
+test("the bootstrap token only ever creates the first admin, and sessions do not cross over", async () => {
+  const body = { email: `x-${handle("op")}@digiconomy.example`, displayName: "X", password: OPERATOR_PASSWORD };
   assert.equal((await call("POST", "/internal/platform/operators", { payload: body })).statusCode, 401);
   assert.equal((await call("POST", "/internal/platform/operators", { token: SERVICE_TOKEN, payload: body })).statusCode, 401, "the Portal service token cannot create operators");
   const weak = await call("POST", "/internal/platform/operators", { token: PLATFORM_TOKEN, payload: { ...body, password: "short" } });
   assert.equal(weak.statusCode, 400, weak.body);
-  assert.equal((await call("POST", "/internal/platform/operators", { token: PLATFORM_TOKEN, payload: body })).statusCode, 201);
-  assert.equal((await call("POST", "/internal/platform/operators", { token: PLATFORM_TOKEN, payload: body })).statusCode, 409);
+  const closed = await call("POST", "/internal/platform/operators", { token: PLATFORM_TOKEN, payload: body });
+  assert.equal(closed.statusCode, 409, closed.body);
+  assert.equal(closed.json().error, "bootstrap_closed", "an admin exists, so the bootstrap token can create no one");
   assert.equal((await call("POST", "/v1/platform/login", { payload: { email: body.email, password: "Wrong-Passw0rd-123" } })).statusCode, 401);
 
   const store = await newStore("cross");
@@ -273,7 +269,7 @@ test("a verified referral credits the partner 5% of the setup fee, exactly once,
 
   const ok = await verify(id);
   assert.equal(ok.statusCode, 200, ok.body);
-  assert.deepEqual(ok.json().commission, { amountMinor: 150_000, currency: "NGN", rateBps: 500, status: "accrued" });
+  assert.deepEqual(ok.json().commission, { amountMinor: 150_000, currency: "NGN", rateBps: 500, status: "accrued", payoutStatus: "disabled" });
   const again = await verify(id);
   assert.equal(again.statusCode, 409, again.body);
   assert.equal(await prisma.partnerCommission.count({ where: { partnerId: p.id } }), 1);
@@ -349,11 +345,19 @@ test("a reversal closes the store, reverses the commission once, and keeps the r
   const id = await activate(store, reference, p.code);
 
   const byVerifier = await call("POST", `/v1/platform/activations/${id}/reverse`, { token: verifier, payload: { reason: "Transfer recalled" } });
-  assert.equal(byVerifier.statusCode, 403, "only platform admins reverse");
-  const results = await Promise.all(
+  assert.equal(byVerifier.statusCode, 403, "only platform admins request reversals");
+  const requests = await Promise.all(
     [1, 2, 3].map(() => call("POST", `/v1/platform/activations/${id}/reverse`, { token: admin, payload: { reason: "Transfer recalled" } })),
   );
-  assert.deepEqual(results.map((r) => r.statusCode).sort(), [200, 409, 409], results.map((r) => r.body).join(" | "));
+  assert.deepEqual(requests.map((r) => r.statusCode).sort(), [202, 409, 409], requests.map((r) => r.body).join(" | "));
+  const approvalId = requests.find((r) => r.statusCode === 202)!.json().approval.id as string;
+  assert.equal((await storefront(store)).json().activation.open, true, "nothing changes until a second admin approves");
+  const self = await call("POST", `/v1/platform/approvals/${approvalId}/approve`, { token: admin, payload: {} });
+  assert.equal(self.statusCode, 403, self.body);
+  assert.equal(self.json().error, "same_approver");
+  const results = await Promise.all([1, 2].map(() => call("POST", `/v1/platform/approvals/${approvalId}/approve`, { token: admin2, payload: {} })));
+  assert.deepEqual(results.map((r) => r.statusCode).sort(), [200, 409], results.map((r) => r.body).join(" | "));
+  assert.equal(results.find((r) => r.statusCode === 200)!.json().activation.status, "reversed");
   const commission = await prisma.partnerCommission.findUniqueOrThrow({ where: { activationId: id } });
   assert.equal(commission.status, "reversed");
   assert.ok(commission.reversedAt);
@@ -436,7 +440,7 @@ test("the early-adopter price applies only when enabled, and within its limit", 
     assert.equal(sub.statusCode, 201, sub.body);
     const ok = await verify(sub.json().id, verifier, { amountMinor: 2000, currency: "USD" });
     assert.equal(ok.statusCode, 200, ok.body);
-    assert.deepEqual(ok.json().commission, { amountMinor: 100, currency: "USD", rateBps: 500, status: "accrued" });
+    assert.deepEqual(ok.json().commission, { amountMinor: 100, currency: "USD", rateBps: 500, status: "accrued", payoutStatus: "disabled" });
 
     const late = await newStore("early-full");
     const full = await submit(late, { plan: "early_adopter", paymentReference: handle("EA") });

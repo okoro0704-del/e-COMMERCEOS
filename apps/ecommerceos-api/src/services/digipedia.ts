@@ -21,10 +21,12 @@ export async function callDigiPediaManage(input: {
   accept?: string;
 }) {
   if (!config.digipediaManageKey) {
-    throw httpError(503, "digipedia_unconfigured", "DigiPedia authoring is not configured for this Admin.");
+    throw httpError(503, "digipedia_unconfigured", "DigiPedia is not available for this store yet.");
   }
   const url = `${config.digipediaUrl}/v1/manage/entries/${encodeURIComponent(input.slug)}${input.suffix ?? ""}`;
-  const res = await fetch(url, {
+  let res: Response;
+  try {
+    res = await fetch(url, {
     method: input.method,
     headers: {
       accept: input.accept ?? "application/json",
@@ -34,7 +36,14 @@ export async function callDigiPediaManage(input: {
       "x-digipedia-origin": "ecommerceos",
     },
     body: input.body === undefined ? undefined : JSON.stringify(input.body),
-  });
+    });
+  } catch {
+    // DigiPedia is a separate service; when it cannot be reached, say so plainly.
+    throw httpError(503, "digipedia_unavailable", "DigiPedia is temporarily unavailable. Please try again later.");
+  }
+  if (res.status >= 500) {
+    throw httpError(503, "digipedia_unavailable", "DigiPedia is temporarily unavailable. Please try again later.");
+  }
   if (input.accept === "text/html") {
     if (!res.ok) {
       throw httpError(res.status, "preview_failed", "Preview is not available.");

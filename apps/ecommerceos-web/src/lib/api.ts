@@ -16,6 +16,12 @@ import type {
   PlatformStore,
   ActivationRecord,
   InventoryRow,
+  AuditEntry,
+  OperatorInvitation,
+  OperatorRow,
+  PaymentSettings,
+  PlatformApproval,
+  PlatformLoginStep,
   StoreBranding,
   Product,
   StoreActivation,
@@ -142,10 +148,49 @@ export async function loadStorefront(): Promise<{ store: Storefront; products: P
   return { store, products, mode: "live" };
 }
 
-export async function loadCheckoutAvailability(): Promise<{ onlinePayment: boolean }> {
-  if (DEMO_MODE) return { onlinePayment: false };
+export async function loadCheckoutAvailability(): Promise<{
+  onlinePayment: boolean;
+  methods: { payOnDelivery: boolean; bankTransfer: boolean };
+}> {
+  if (DEMO_MODE) return { onlinePayment: false, methods: { payOnDelivery: false, bankTransfer: false } };
   const store = await request<Storefront>("/v1/storefront");
-  return { onlinePayment: store.checkout?.onlinePayment === true };
+  return {
+    onlinePayment: store.checkout?.onlinePayment === true,
+    methods: store.checkout?.methods ?? { payOnDelivery: false, bankTransfer: false },
+  };
+}
+
+/** Places an order paid to the merchant directly: by bank transfer or on delivery. Takes no money. */
+export async function placeOfflineOrder(input: {
+  buyerName: string;
+  buyerPhone: string;
+  addressLine1: string;
+  city: string;
+  country: string;
+  paymentMethod: "pay_on_delivery" | "bank_transfer";
+}): Promise<Order> {
+  return request<Order>(
+    "/v1/orders",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        buyerName: input.buyerName,
+        buyerPhone: input.buyerPhone,
+        paymentMethod: input.paymentMethod,
+        shipping: { addressLine1: input.addressLine1, city: input.city, country: input.country, lat: 6.5244, lng: 3.3792 },
+      }),
+    },
+    buyerToken(),
+  );
+}
+
+/** The customer tells the store they sent the transfer. The store still has to confirm it. */
+export async function reportTransfer(orderId: string, input: { reference: string; payerName: string }): Promise<Order> {
+  return request<Order>(
+    `/v1/orders/${encodeURIComponent(orderId)}/payment-notification`,
+    { method: "POST", body: JSON.stringify(input) },
+    buyerToken(),
+  );
 }
 
 export async function loadProduct(id: string): Promise<{ product: Product; mode: ApiMode }> {
@@ -422,8 +467,40 @@ export async function merchantOrder(token: string, id: string) {
   return request<Order>(`/v1/orders/${encodeURIComponent(id)}`, {}, token);
 }
 
-export async function cancelMerchantOrder(token: string, id: string, reason: string) {
-  return request<Order>(`/v1/orders/${encodeURIComponent(id)}/cancel`, { method: "POST", body: JSON.stringify({ reason }) }, token);
+export async function cancelMerchantOrder(token: string, id: string, reason: string, refundReference?: string) {
+  return request<Order>(
+    `/v1/orders/${encodeURIComponent(id)}/cancel`,
+    { method: "POST", body: JSON.stringify({ reason, ...(refundReference ? { refundReference } : {}) }) },
+    token,
+  );
+}
+
+export async function verifyOrderPayment(token: string, id: string, amountReceivedMinor: number, merchantReference?: string) {
+  return request<Order>(
+    `/v1/orders/${encodeURIComponent(id)}/payment/verify`,
+    { method: "POST", body: JSON.stringify({ amountReceivedMinor, ...(merchantReference ? { merchantReference } : {}) }) },
+    token,
+  );
+}
+
+export async function rejectOrderPayment(token: string, id: string, reason: string) {
+  return request<Order>(`/v1/orders/${encodeURIComponent(id)}/payment/reject`, { method: "POST", body: JSON.stringify({ reason }) }, token);
+}
+
+export async function advanceOrder(token: string, id: string, action: "dispatch" | "deliver" | "complete", amountCollectedMinor?: number) {
+  return request<Order>(
+    `/v1/orders/${encodeURIComponent(id)}/fulfilment`,
+    { method: "POST", body: JSON.stringify({ action, ...(amountCollectedMinor === undefined ? {} : { amountCollectedMinor }) }) },
+    token,
+  );
+}
+
+export async function loadPaymentSettings(token: string) {
+  return request<PaymentSettings>("/v1/store/payment-settings", {}, token);
+}
+
+export async function savePaymentSettings(token: string, input: Partial<Omit<PaymentSettings, "accepted">>) {
+  return request<PaymentSettings>("/v1/store/payment-settings", { method: "PATCH", body: JSON.stringify(input) }, token);
 }
 
 export async function lowStock(token: string, threshold = 5) {
@@ -444,7 +521,63 @@ export async function submitStoreActivation(
 // Digiconomy platform console. Operator sessions are separate from store sessions.
 
 export async function platformLogin(email: string, password: string) {
-  return request<PlatformSession>("/v1/platform/login", { method: "POST", body: JSON.stringify({ email, password }) });
+  return request<PlatformLoginStep>("/v1/platform/login", { method: "POST", body: JSON.stringify({ email, password }) });
+}
+
+export async function platformMfa(token: string, code: string) {
+  return request<PlatformLoginStep>("/v1/platform/login/mfa", { method: "POST", body: JSON.stringify({ token, code }) });
+}
+
+export async function startMfaEnrollment(token: string) {
+  return request<{ secret: string; otpauthUrl: string }>("/v1/platform/mfa/enroll/start", { method: "POST", body: JSON.stringify({ token }) });
+}
+
+export async function confirmMfaEnrollment(token: string, code: string) {
+  return request<PlatformLoginStep>("/v1/platform/mfa/enroll/confirm", { method: "POST", body: JSON.stringify({ token, code }) });
+}
+
+export async function acceptOperatorInvitation(code: string, displayName: string, password: string) {
+  return request<PlatformLoginStep>("/v1/platform/invitations/accept", { method: "POST", body: JSON.stringify({ code, displayName, password }) });
+}
+
+export async function platformOperators(token: string) {
+  return request<{ operators: OperatorRow[] }>("/v1/platform/operators", {}, token);
+}
+
+export async function inviteOperator(token: string, email: string, role: "verifier" | "admin") {
+  return request<OperatorInvitation>("/v1/platform/operators/invite", { method: "POST", body: JSON.stringify({ email, role }) }, token);
+}
+
+export async function platformInvitations(token: string) {
+  return request<{ invitations: OperatorInvitation[] }>("/v1/platform/invitations", {}, token);
+}
+
+export async function revokeOperatorInvitation(token: string, id: string) {
+  await request(`/v1/platform/invitations/${id}/revoke`, { method: "POST" }, token);
+}
+
+export async function setOperatorRole(token: string, id: string, role: "verifier" | "admin") {
+  return request(`/v1/platform/operators/${id}/role`, { method: "POST", body: JSON.stringify({ role }) }, token);
+}
+
+export async function operatorAction(token: string, id: string, action: "suspend" | "reactivate" | "reset-mfa" | "revoke-sessions") {
+  return request(`/v1/platform/operators/${id}/${action}`, { method: "POST" }, token);
+}
+
+export async function signOutEverywhere(token: string) {
+  return request<{ revoked: number }>("/v1/platform/me/sign-out-everywhere", { method: "POST" }, token);
+}
+
+export async function platformApprovals(token: string) {
+  return request<{ approvals: PlatformApproval[] }>("/v1/platform/approvals", {}, token);
+}
+
+export async function decidePlatformApproval(token: string, id: string, decision: "approve" | "decline", note?: string) {
+  return request(`/v1/platform/approvals/${id}/${decision}`, { method: "POST", body: JSON.stringify(note ? { note } : {}) }, token);
+}
+
+export async function platformAudit(token: string) {
+  return request<{ entries: AuditEntry[] }>("/v1/platform/audit?limit=200", {}, token);
 }
 
 export async function platformLogout(token: string) {
