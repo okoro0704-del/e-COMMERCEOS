@@ -1451,7 +1451,8 @@ function OrdersAdmin({
   const [input, setInput] = useState({ reason: "", amount: "", reference: "", refund: "" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const visible = filter ? orders.filter((o) => o.status === filter) : orders;
+  // The order being worked on stays in view after an action moves it to another status.
+  const visible = filter ? orders.filter((o) => o.status === filter || o.id === open?.id) : orders;
   const canRecordMoney = role === "owner" || role === "admin";
 
   async function act(work: () => Promise<Order>) {
