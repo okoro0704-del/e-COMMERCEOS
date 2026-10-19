@@ -1,10 +1,38 @@
-# LifeOS Portal ↔ eCommerceOS: storefront provisioning contract (proposal v1)
+# LifeOS Portal ↔ eCommerceOS: storefront provisioning contract (proposal v2)
 
 Status: **proposal for joint review** by the eCommerceOS track and the LifeOS Portal release
 owner. LifeOS Portal is not modified by this work. Neither side connects to the other's staging
-until a specific joint integration authorization is given.
+until a specific joint integration authorization is given. Only documentation is exchanged:
+no secrets, no environment access, no cross-repository changes.
 
-Each item is marked **[built]** (on branch `dev/phase2-commercial`, tested) or **[proposed]**.
+Each item is marked **[built]** (on `dev/phase2-commercial`/`dev/phase3-release-hardening`,
+tested) or **[proposed]**.
+
+## 0. Exchange protocol (v2)
+
+The founder named session `finprov-c0` as the Portal counterpart. Before this document is sent,
+that session must show it controls the intended LifeOS Portal repository. It reports, without
+any secret:
+1. the working-copy path;
+2. `git remote get-url origin`;
+3. the short SHAs of `integration/phase1-payment-containment` and `followup/phase1-plan-v2`.
+
+These must match the recorded heads, `a3e0129` and `25cb161`. Status on 2026-10-19: the request
+could not be delivered, because `finprov-c0` was no longer running. It will be re-sent when the
+session is live again.
+
+### Changes since v1
+- **Provisioning [built]:** a failed provisioning leaves nothing and can be retried. Errors are
+  masked, and a status endpoint exists (sections 3–4).
+- **Activation [built]:**
+  - Draft invoice and receipt documents carry unreviewed tax fields.
+  - A reversal needs a second Digiconomy admin.
+  - Commission payouts are disabled.
+- **Checkout [built]:** customers pay merchants directly, by bank transfer or on delivery. This is
+  internal to eCommerceOS. Portal neither sees nor handles customer payments, and no customer
+  money passes through Digiconomy.
+- **Event payloads [proposed]:** activation events also carry the draft document numbers
+  (section 6).
 
 ## 1. Identifiers
 
@@ -109,7 +137,8 @@ The request names `subdomain` and `ownerSubject`, and optionally `ownerEmail` an
   - `activation.submitted`, `activation.verified`, `activation.rejected`, `activation.reversed`
   - `partner_commission.accrued`, `partner_commission.reversed`
 - **Payload:** `{ id, type, occurredAt, tenantId, subdomain, activation: { id, status, plan,
-  amountMinor, currency }, partnerCode? }`. No payer names and no bank details.
+  amountMinor, currency, documents: [{ kind, number, status }] }, partnerCode? }`. No payer
+  names and no bank details.
 - **Ordering.** Apply by `occurredAt`. When in doubt, re-read the status endpoint.
 - **Until this exists:** Portal polls the status endpoint (section 4).
 
