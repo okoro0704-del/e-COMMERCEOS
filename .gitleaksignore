@@ -11,3 +11,10 @@
 490a1c435ecf2268833b697a265353a620fdee58:tests/e2e/commercial-activation.test.ts:generic-api-key:23
 490a1c435ecf2268833b697a265353a620fdee58:tests/e2e/commercial-activation.test.ts:generic-api-key:24
 727157fa03ec217819b7a311b9cc3c0ad1a5a3a3:tests/e2e/merchant-dashboard.test.ts:generic-api-key:20
+
+# Phase 3 test-only fixtures (2026-10-19): the reused store-owner and operator fixture passwords in
+# the new offline-checkout and platform-console suites, and the test-only operator MFA key value.
+0736eba4f4e1f94a10e011590bcfb7cd65cd707e:tests/e2e/offline-checkout.test.ts:generic-api-key:22
+0860dbeda61d01fddb5273cca8b176f80f25d631:tests/e2e/commercial-activation.test.ts:generic-api-key:33
+0860dbeda61d01fddb5273cca8b176f80f25d631:tests/e2e/platform-console.test.ts:generic-api-key:23
+0860dbeda61d01fddb5273cca8b176f80f25d631:tests/e2e/platform-console.test.ts:generic-api-key:24
