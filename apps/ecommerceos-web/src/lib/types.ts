@@ -39,7 +39,7 @@ export type Storefront = {
     createdByMarketplace?: boolean;
   }>;
   wholesale?: { minQuantityDefault?: number } | null;
-  checkout?: { onlinePayment: boolean };
+  checkout?: { onlinePayment: boolean; methods?: { payOnDelivery: boolean; bankTransfer: boolean } };
   /** Closed while the store awaits its verified setup payment. */
   activation?: { open: boolean };
 };
@@ -150,7 +150,9 @@ export type Order = {
   createdAt: string;
   logisticsJobId?: string | null;
   paymentExpiresAt?: string;
-  paymentStatus?: "unpaid" | "simulated_not_paid" | "provider_reported";
+  paymentStatus?: string;
+  paymentMethod?: "pay_on_delivery" | "bank_transfer" | null;
+  payment?: OrderPayment;
   paymentVerified?: boolean;
   fulfilmentStatus?: string;
   shippingCity?: string;
@@ -197,7 +199,8 @@ export type ActivationRecord = {
   reversedAt: string | null;
   reversedReason: string | null;
   partner: { code: string; name: string } | null;
-  commission: { amountMinor: number; currency: string; rateBps: number; status: string } | null;
+  commission: { amountMinor: number; currency: string; rateBps: number; status: string; payoutStatus?: string } | null;
+  documents?: BillingDocument[];
   store?: { tenantId: string; slug: string; name: string };
 };
 
@@ -212,6 +215,25 @@ export type StoreActivation = {
 
 export type PlatformOperator = { id?: string; operatorId?: string; email: string; displayName: string; role: "verifier" | "admin" };
 export type PlatformSession = { token: string; expiresAt: string; operator: PlatformOperator };
+/** A sign-in step: only "complete" carries a console session. */
+export type PlatformLoginStep =
+  | { stage: "mfa_required" | "mfa_enrollment"; token: string; expiresAt: string }
+  | ({ stage: "complete" } & PlatformSession);
+export type OperatorRow = PlatformOperator & { id: string; status: string; mfaEnabled: boolean; createdAt: string };
+export type OperatorInvitation = { id: string; email: string; role: string; status?: string; code?: string; expiresAt: string };
+export type PlatformApproval = {
+  id: string;
+  kind: string;
+  targetId: string;
+  reason: string;
+  status: string;
+  requestedById: string;
+  decidedById: string | null;
+  decidedAt: string | null;
+  decisionNote: string | null;
+  createdAt: string;
+};
+export type AuditEntry = { id: string; at: string; actorKind: string; actorId: string | null; action: string; resource: string; resourceId: string | null };
 
 export type MarketingPartner = {
   id: string;
@@ -274,4 +296,44 @@ export type InventoryRow = {
   inventoryCount: number;
   reservedCount: number;
   available: number;
+};
+
+export type OrderPayment = {
+  method: "pay_on_delivery" | "bank_transfer";
+  status: string;
+  amountMinor: number;
+  currency: string;
+  bankName?: string | null;
+  bankAccountName?: string | null;
+  bankAccountNumber?: string | null;
+  customerReference: string | null;
+  customerReportedAt: string | null;
+  verifiedAt: string | null;
+  rejectedReason: string | null;
+  merchantReference?: string | null;
+  refundReference?: string | null;
+};
+
+export type PaymentSettings = {
+  payOnDeliveryEnabled: boolean;
+  bankTransferEnabled: boolean;
+  bankName: string | null;
+  bankAccountName: string | null;
+  bankAccountNumber: string | null;
+  bankTransferNote: string;
+  accepted: { payOnDelivery: boolean; bankTransfer: boolean };
+};
+
+export type BillingDocument = {
+  kind: "invoice" | "receipt";
+  number: string;
+  status: string;
+  draft: boolean;
+  billedTo: string;
+  amountMinor: number;
+  currency: string;
+  transactionReference: string | null;
+  tax: { treatment: string; rateBps: number | null; amountMinor: number | null };
+  issuedAt: string;
+  voidedAt: string | null;
 };
