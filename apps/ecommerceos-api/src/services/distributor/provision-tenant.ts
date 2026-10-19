@@ -136,54 +136,62 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
     },
   });
 
-  for (const moduleId of modules) {
-    await prisma.tenantModule.create({
-      data: { tenantId: tenant.id, moduleId, enabled: true, config: {} },
-    });
-  }
-
   const adminEmail = (input.adminStaff?.email ?? `owner@${slug}.commerce.local`).trim().toLowerCase();
   const credentials = ownerCredentials(input, adminEmail);
-  const staff = await prisma.staffMember.create({
-    data: {
-      tenantId: tenant.id,
-      displayName: input.adminStaff?.displayName ?? "Owner",
-      email: adminEmail,
-      passwordHash: credentials.passwordHash,
-      role: input.adminStaff?.role ?? "owner",
-      trustId: input.owner?.subject ?? null,
-      status: "active",
-    },
-  });
+  let staff: Awaited<ReturnType<typeof prisma.staffMember.create>>;
+  // Undo a half-created store if any later step fails, so the same request can simply be retried
+  // (otherwise the handle stays taken with no owner and every retry is refused as a conflict).
+  try {
+    for (const moduleId of modules) {
+      await prisma.tenantModule.create({
+        data: { tenantId: tenant.id, moduleId, enabled: true, config: {} },
+      });
+    }
 
-  if (seedMode === "default") {
-    await seedStoreDefaults({
-      tenantId: tenant.id,
-      displayName: input.displayName,
-      subdomain: slug,
-      verticalId: preset.id,
-      pickup: input.pickup,
-      defaultCurrency: input.defaultCurrency,
-      deliveryRadiusKm: input.deliveryRadiusKm,
+    staff = await prisma.staffMember.create({
+      data: {
+        tenantId: tenant.id,
+        displayName: input.adminStaff?.displayName ?? "Owner",
+        email: adminEmail,
+        passwordHash: credentials.passwordHash,
+        role: input.adminStaff?.role ?? "owner",
+        trustId: input.owner?.subject ?? null,
+        status: "active",
+      },
     });
-  }
 
-  await writeAudit({
-    tenantId: tenant.id,
-    actorKind: "system",
-    action: "distributor.provision",
-    resource: "tenant",
-    resourceId: tenant.id,
-    metadata: {
-      distributorTenantId: input.distributorTenantId,
-      slug,
-      modules,
-      seed: seedMode,
-      credentialSetup: credentials.setup,
-      ownerBound: Boolean(input.owner?.subject),
-      fingerprint: createHash("sha256").update(`${slug}:${tenant.id}`).digest("hex").slice(0, 16),
-    },
-  });
+    if (seedMode === "default") {
+      await seedStoreDefaults({
+        tenantId: tenant.id,
+        displayName: input.displayName,
+        subdomain: slug,
+        verticalId: preset.id,
+        pickup: input.pickup,
+        defaultCurrency: input.defaultCurrency,
+        deliveryRadiusKm: input.deliveryRadiusKm,
+      });
+    }
+
+    await writeAudit({
+      tenantId: tenant.id,
+      actorKind: "system",
+      action: "distributor.provision",
+      resource: "tenant",
+      resourceId: tenant.id,
+      metadata: {
+        distributorTenantId: input.distributorTenantId,
+        slug,
+        modules,
+        seed: seedMode,
+        credentialSetup: credentials.setup,
+        ownerBound: Boolean(input.owner?.subject),
+        fingerprint: createHash("sha256").update(`${slug}:${tenant.id}`).digest("hex").slice(0, 16),
+      },
+    });
+  } catch (err) {
+    await prisma.tenant.delete({ where: { id: tenant.id } }).catch(() => undefined);
+    throw err;
+  }
 
   const storefrontUrl = launchUrl(config.storefrontLaunchUrlTemplate, slug);
   const adminConsoleUrl = launchUrl(config.adminLaunchUrlTemplate, slug);
