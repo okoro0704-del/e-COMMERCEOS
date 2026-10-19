@@ -7,6 +7,7 @@ import { prisma } from "./db.js";
 import { registerRoutes } from "./routes.js";
 import { registerLocalPrimitiveProvidersOrRemote } from "./services/register-primitives.js";
 import { registerJobHandlers } from "./services/jobs.js";
+import { originAllowed } from "./lib/cors.js";
 
 export async function buildApp() {
   registerLocalPrimitiveProvidersOrRemote();
@@ -22,27 +23,14 @@ export async function buildApp() {
   });
 
   await app.register(cors, {
+    // Only the origins named in CORS_ORIGINS; no built-in hosting suffixes (see lib/cors.ts).
     origin: (origin, cb) => {
       if (!origin) return cb(null, true);
-      if (config.corsOrigins.includes("*") || config.corsOrigins.includes(origin)) {
-        return cb(null, true);
-      }
-      try {
-        const host = new URL(origin).hostname;
-        if (
-          host.endsWith(".netlify.app") ||
-          host.endsWith(".getlifeos.app") ||
-          host.endsWith(".lifeos.app") ||
-          host === "localhost" ||
-          host === "getlifeos.app"
-        ) {
-          return cb(null, true);
-        }
-      } catch {
-        return cb(null, false);
-      }
-      return cb(null, false);
+      return cb(null, originAllowed(origin, config.corsOrigins, config.env));
     },
+    // The plugin's default is GET,HEAD,POST, which blocked the web app's cart, catalogue,
+    // marketplace and DigiPedia updates from the browser.
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
     credentials: true,
   });
 
