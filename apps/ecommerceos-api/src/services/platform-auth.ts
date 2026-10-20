@@ -387,6 +387,9 @@ export async function platformAuditLog(limit = 200) {
         { action: { startsWith: "platform." } },
         { action: { startsWith: "activation." } },
         { action: { startsWith: "partner." } },
+        // Calls from other Digiconomy services (Portal's reads and writes) and seller registrations.
+        { action: { startsWith: "service." } },
+        { action: { startsWith: "portal." } },
       ],
     },
     orderBy: { createdAt: "desc" },
