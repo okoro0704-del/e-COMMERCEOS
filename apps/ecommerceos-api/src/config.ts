@@ -65,6 +65,8 @@ export const config = {
    * platform staff verify their setup payment; stores created earlier are grandfathered.
    */
   activationRequired: process.env.ECO_ACTIVATION_REQUIRED === "true",
+  /** Release window: Portal provisioning creates nothing (retryable 503); status reads and handoff still work. */
+  provisioningPaused: process.env.ECO_PROVISIONING_PAUSED === "true",
   /** Shown to owners with the setup fee: how to pay outside the platform. Empty until approved. */
   setupPaymentInstructions: process.env.ECO_SETUP_PAYMENT_INSTRUCTIONS ?? "",
   /** Early-adopter setup price. Off until Digiconomy confirms eligibility, amount and currency. */

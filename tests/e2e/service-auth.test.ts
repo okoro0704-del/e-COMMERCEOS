@@ -323,6 +323,42 @@ test("wrong issuer, key, audience, route, body, idempotency key, permission, lif
   assert.ok(await prisma.auditLog.count({ where: { action: "service.call_refused" } }), "refusals are audited");
 });
 
+test("while provisioning is paused nothing is created and status reads still answer; the same request succeeds afterwards", async () => {
+  const { config } = await import("../../apps/ecommerceos-api/src/config.ts");
+  const installId = handle("ins");
+  const subdomain = handle("paused");
+  const body = provisionBody(installId, subdomain, "trustid:owner-paused");
+  const idk = `portal-install:${installId}`;
+  config.provisioningPaused = true;
+  try {
+    const paused = await signedCall("POST", "/internal/distributor/provision", body, { idk }).res;
+    assert.equal(paused.statusCode, 503, paused.body);
+    assert.equal(paused.json().error, "provisioning_paused");
+    assert.equal(await prisma.tenant.count({ where: { slug: subdomain } }), 0, "nothing created");
+    assert.equal(await prisma.portalInstall.count({ where: { installId } }), 0, "no install claimed");
+    assert.equal((await signedCall("GET", `/internal/ecommerceos/stores/${subdomain}`, undefined).res).statusCode, 404, "status still answers");
+  } finally {
+    config.provisioningPaused = false;
+  }
+  assert.equal((await signedCall("POST", "/internal/distributor/provision", body, { idk }).res).statusCode, 201);
+});
+
+test("each service call is in the operator audit log with its caller, route and correlation id", async () => {
+  const installId = handle("ins");
+  const subdomain = handle("audit");
+  const idk = `portal-install:${installId}`;
+  assert.equal((await signedCall("POST", "/internal/distributor/provision", provisionBody(installId, subdomain, "trustid:owner-audit"), { idk }).res).statusCode, 201);
+  const url = `/internal/ecommerceos/stores/${subdomain}`;
+  const token = sign({ issuer: "status-reader", kid: "reader-test-1", key: readerKey.privateKey, audience: "ecommerceos", method: "GET", path: url, body: "" });
+  const read = await app.inject({ method: "GET", url, headers: { authorization: `Bearer ${token}`, "x-request-id": `recon-run-1-${installId}` } });
+  assert.equal(read.statusCode, 200, read.body);
+  const audit = await app.inject({ method: "GET", url: "/v1/platform/audit?limit=500", headers: { authorization: `Bearer ${operatorToken}` } });
+  assert.equal(audit.statusCode, 200, audit.body);
+  const rows = (audit.json().entries as Array<{ action: string; actorId: string | null; resourceId: string | null; metadata: { correlationId?: string; permission?: string } }>).filter((e) => e.metadata?.correlationId === `recon-run-1-${installId}`);
+  assert.equal(rows.length, 1, "exactly one audit row for the read");
+  assert.deepEqual([rows[0]!.action, rows[0]!.actorId, rows[0]!.resourceId, rows[0]!.metadata.permission], ["service.call_authorized", "status-reader", `GET ${url}`, "stores:read"]);
+});
+
 test("in signed mode the shared token is refused on Portal routes, and Portal tokens open no other internal route", async () => {
   const shared = await app.inject({ method: "POST", url: "/internal/distributor/provision", headers: { authorization: `Bearer ${SHARED}` }, payload: provisionBody(handle("ins"), handle("shared"), "trustid:x") });
   assert.equal(shared.statusCode, 401, shared.body);

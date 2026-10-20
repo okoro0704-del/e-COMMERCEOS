@@ -27,6 +27,13 @@ export function requireInternalToken(authHeader: string | undefined): boolean {
 export async function registerInternalProvisionRoutes(app: FastifyInstance) {
   app.post("/internal/distributor/provision", async (req, reply) => {
     if (!(await authorizeService(req, reply, "stores:provision"))) return;
+    if (config.provisioningPaused) {
+      return reply.code(503).send({
+        error: "provisioning_paused",
+        message: "New stores cannot be created during maintenance. Nothing was created; retry the same request later.",
+        requestId: req.id,
+      });
+    }
 
     const body = z
       .object({
