@@ -323,6 +323,22 @@ test("wrong issuer, key, audience, route, body, idempotency key, permission, lif
   assert.ok(await prisma.auditLog.count({ where: { action: "service.call_refused" } }), "refusals are audited");
 });
 
+test("a signed call may not set an owner password or a payout account; nothing is created", async () => {
+  for (const [field, extra] of [
+    ["adminStaff.password", { adminStaff: { email: "owner@pw.example", displayName: "Owner", role: "owner", password: PASSWORD } }],
+    ["walletPayoutAccount", { walletPayoutAccount: "0123456789" }],
+  ] as const) {
+    const installId = handle("ins");
+    const subdomain = handle("fields");
+    const res = await signedCall("POST", "/internal/distributor/provision", { ...provisionBody(installId, subdomain, "trustid:owner-fields"), ...extra }, { idk: `portal-install:${installId}` }).res;
+    assert.equal(res.statusCode, 400, res.body);
+    assert.equal(res.json().error, "field_not_allowed");
+    assert.deepEqual(res.json().fields, [field]);
+    assert.ok(!res.body.includes(PASSWORD) && !res.body.includes("0123456789"), "values are never echoed");
+    assert.equal(await prisma.tenant.count({ where: { slug: subdomain } }), 0, "nothing created");
+  }
+});
+
 test("while provisioning is paused nothing is created and status reads still answer; the same request succeeds afterwards", async () => {
   const { config } = await import("../../apps/ecommerceos-api/src/config.ts");
   const installId = handle("ins");
@@ -376,10 +392,15 @@ test("in signed mode the shared token is refused on Portal routes, and Portal to
 async function marketplaceOperatorToken() {
   const subdomain = handle("mkt");
   const installId = handle("ins");
-  const prov = await signedCall("POST", "/internal/distributor/provision", { ...provisionBody(installId, subdomain, `trustid:${subdomain}`), adminStaff: { email: `owner@${subdomain}.example`, displayName: "Owner", role: "owner", password: PASSWORD } }, { idk: `portal-install:${installId}` }).res;
+  // As in production: Portal provisions without a password, and the owner arrives through the handoff.
+  const prov = await signedCall("POST", "/internal/distributor/provision", provisionBody(installId, subdomain, `trustid:${subdomain}`), { idk: `portal-install:${installId}` }).res;
   assert.equal(prov.statusCode, 201, prov.body);
-  const login = await app.inject({ method: "POST", url: "/v1/auth/merchant/login", payload: { email: `owner@${subdomain}.example`, password: PASSWORD, tenantSlug: subdomain } });
-  const token = login.json().token as string;
+  const handoff = await signedCall("POST", "/internal/ecommerceos/admin-handoff", { subdomain, ownerSubject: `trustid:${subdomain}`, installId }).res;
+  assert.equal(handoff.statusCode, 201, handoff.body);
+  const code = decodeURIComponent((handoff.json().url as string).split("#handoff=")[1]!);
+  const session = await app.inject({ method: "POST", url: "/v1/auth/merchant/handoff/exchange", payload: { code } });
+  assert.equal(session.statusCode, 200, session.body);
+  const token = session.json().token as string;
   await app.inject({ method: "POST", url: "/v1/marketplace/enable", headers: { authorization: `Bearer ${token}` } });
   return token;
 }

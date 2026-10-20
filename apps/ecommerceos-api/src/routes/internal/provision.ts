@@ -26,7 +26,8 @@ export function requireInternalToken(authHeader: string | undefined): boolean {
  */
 export async function registerInternalProvisionRoutes(app: FastifyInstance) {
   app.post("/internal/distributor/provision", async (req, reply) => {
-    if (!(await authorizeService(req, reply, "stores:provision"))) return;
+    const caller = await authorizeService(req, reply, "stores:provision");
+    if (!caller) return;
     if (config.provisioningPaused) {
       return reply.code(503).send({
         error: "provisioning_paused",
@@ -98,6 +99,16 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
         message: "distributorTenantId or tenantId is required",
       })
       .parse(req.body);
+
+    // Another service may not set an owner's password or where money is paid: the owner sets their
+    // password through the handoff, and payout details come only from the owner. Legacy shared-token
+    // callers keep the old behaviour until that token is retired.
+    if (caller.kind === "signed") {
+      const fields = [body.adminStaff?.password !== undefined && "adminStaff.password", body.walletPayoutAccount !== undefined && "walletPayoutAccount"].filter(Boolean);
+      if (fields.length) {
+        return reply.code(400).send({ error: "field_not_allowed", message: "A service call may not set an owner password or a payout account.", fields, requestId: req.id });
+      }
+    }
 
     // Idempotency-Key names the install: "portal-install:<installId, else tenantId>".
     const header = req.headers["idempotency-key"];
