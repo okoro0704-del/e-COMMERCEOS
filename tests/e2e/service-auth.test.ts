@@ -336,7 +336,9 @@ test("while provisioning is paused nothing is created and status reads still ans
     assert.equal(paused.json().error, "provisioning_paused");
     assert.equal(await prisma.tenant.count({ where: { slug: subdomain } }), 0, "nothing created");
     assert.equal(await prisma.portalInstall.count({ where: { installId } }), 0, "no install claimed");
-    assert.equal((await signedCall("GET", `/internal/ecommerceos/stores/${subdomain}`, undefined).res).statusCode, 404, "status still answers");
+    const status = await signedCall("GET", `/internal/ecommerceos/stores/${subdomain}`, undefined).res;
+    assert.equal(status.statusCode, 404, "status still answers");
+    assert.equal(status.json().provisioningPaused, true, "a 404 says no provisioning can still create the store");
   } finally {
     config.provisioningPaused = false;
   }

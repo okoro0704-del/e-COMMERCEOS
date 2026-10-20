@@ -160,7 +160,8 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
       where: { slug: subdomain.trim().toLowerCase() },
       include: { storeConfig: true, staff: { where: { role: "owner", status: "active" } }, portalInstall: true },
     });
-    if (!tenant) return reply.code(404).send({ error: "not_found", message: "Store not found" });
+    // provisioningPaused true: this process creates no stores, so a 404 cannot be overtaken by a request in flight.
+    if (!tenant) return reply.code(404).send({ error: "not_found", message: "Store not found", provisioningPaused: config.provisioningPaused });
     return {
       tenantId: tenant.id,
       subdomain: tenant.slug,
@@ -177,6 +178,7 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
         storeOpen: await storeOpenForBuyers(tenant.id),
       },
       createdAt: tenant.createdAt.toISOString(),
+      provisioningPaused: config.provisioningPaused,
     };
   });
 }
