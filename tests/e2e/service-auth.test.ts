@@ -220,6 +220,17 @@ test("duplicate setup requests create no duplicate store, sequentially or concur
   assert.equal(replay.json().tenantId, all.find((r) => r.statusCode === 201)!.json().tenantId);
 });
 
+test("concurrent duplicates of one install never get a terminal conflict (a request can find the store by subdomain before its owner exists)", async () => {
+  for (let round = 0; round < 10; round += 1) {
+    const installId = handle("ins");
+    const body = provisionBody(installId, handle("race"), `trustid:race-${round}`);
+    const all = await Promise.all([1, 2, 3, 4, 5, 6].map(() => signedCall("POST", "/internal/distributor/provision", body, { idk: `portal-install:${installId}` }).res));
+    const outcomes = all.map((r) => `${r.statusCode} ${r.json().error ?? ""}`.trim());
+    assert.ok(outcomes.every((o) => o === "201" || o === "200" || o === "503 provision_in_progress"), outcomes.join(" | "));
+    assert.equal(await prisma.tenant.count({ where: { portalInstallId: installId } }), 1);
+  }
+});
+
 test("the same key for another request, a key naming another install, and another owner's subdomain claim are refused", async () => {
   const installId = handle("ins");
   const subdomain = handle("claim");

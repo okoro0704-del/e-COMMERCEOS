@@ -73,6 +73,8 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
     if (prior) return replayIdempotent(prior, input);
   }
   const existing = await prisma.tenant.findUnique({ where: { slug } });
+  // A concurrent request for the same install created the store after the key lookup above.
+  if (existing && input.idempotencyKey && existing.provisionKey === input.idempotencyKey) return replayIdempotent(existing, input);
   if (existing && input.installId && existing.portalInstallId && existing.portalInstallId !== input.installId) {
     throw httpError(409, "conflict", `Tenant slug already exists: ${slug}`);
   }
