@@ -239,13 +239,13 @@ export async function createAdminHandoff(opts: {
 }) {
   const tenant = await prisma.tenant.findUnique({
     where: { slug: opts.subdomain.trim().toLowerCase() },
-    include: { staff: true },
+    include: { staff: true, portalInstall: true },
   });
   if (!tenant || tenant.status !== "active") throw httpError(404, "not_found", "Store not found");
   if (opts.tenantId && opts.tenantId !== tenant.id) throw httpError(409, "tenant_mismatch", "Store does not match");
   if (opts.installId) {
     const settings = tenant.settings && typeof tenant.settings === "object" ? (tenant.settings as Record<string, unknown>) : {};
-    const boundInstall = tenant.portalInstallId ?? settings.distributorTenantId;
+    const boundInstall = tenant.portalInstall?.installId ?? settings.distributorTenantId;
     if (boundInstall !== opts.installId) throw httpError(403, "install_mismatch", "This store belongs to another install.");
   }
 

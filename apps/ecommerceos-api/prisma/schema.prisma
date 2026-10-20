@@ -34,11 +34,6 @@ model Tenant {
   settings           Json
   /// legacy: created before paid activation (open); pending: awaiting a verified setup payment; active: verified.
   activationStatus   String   @default("legacy")
-  /// LifeOS Portal install this store was created for: one store per install.
-  portalInstallId    String?  @unique
-  /// Idempotency-Key of the provisioning request ("portal-install:<id>") and its request fingerprint.
-  provisionKey         String?  @unique
-  provisionRequestHash String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -57,6 +52,7 @@ model Tenant {
   businessPublications BusinessPublication[]
   auditLogs    AuditLog[]
   activations  Activation[]
+  portalInstall PortalInstall?
 
   @@index([organizationId])
   @@index([status])
@@ -607,6 +603,19 @@ model PlatformApproval {
 }
 
 /// Single-use record of every accepted service-token jti: hex SHA-256 of iss + "\n" + jti only.
+/// The LifeOS Portal install a store was created for (one store per install), with the provisioning
+/// request's Idempotency-Key ("portal-install:<id>") and fingerprint. A table of its own: adding unique
+/// columns to Tenant makes the boot-time `db push` refuse on a database that already has stores.
+model PortalInstall {
+  installId    String   @id
+  tenantId     String   @unique
+  provisionKey String?  @unique
+  requestHash  String?
+  createdAt    DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
 model ServiceTokenUse {
   digest    String   @id
   issuer    String

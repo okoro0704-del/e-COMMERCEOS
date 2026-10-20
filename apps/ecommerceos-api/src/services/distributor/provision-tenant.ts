@@ -69,13 +69,14 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
   const modules = input.modules?.length ? input.modules : [...preset.modules];
 
   if (input.idempotencyKey) {
-    const prior = await prisma.tenant.findUnique({ where: { provisionKey: input.idempotencyKey } });
+    const prior = await prisma.portalInstall.findUnique({ where: { provisionKey: input.idempotencyKey } });
     if (prior) return replayIdempotent(prior, input);
   }
-  const existing = await prisma.tenant.findUnique({ where: { slug } });
+  const existing = await prisma.tenant.findUnique({ where: { slug }, include: { portalInstall: true } });
+  const bound = existing?.portalInstall;
   // A concurrent request for the same install created the store after the key lookup above.
-  if (existing && input.idempotencyKey && existing.provisionKey === input.idempotencyKey) return replayIdempotent(existing, input);
-  if (existing && input.installId && existing.portalInstallId && existing.portalInstallId !== input.installId) {
+  if (bound && input.idempotencyKey && bound.provisionKey === input.idempotencyKey) return replayIdempotent(bound, input);
+  if (existing && input.installId && bound && bound.installId !== input.installId) {
     throw httpError(409, "conflict", `Tenant slug already exists: ${slug}`);
   }
   if (existing) {
@@ -125,9 +126,6 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
   try {
     tenant = await prisma.tenant.create({
       data: {
-        portalInstallId: input.installId ?? null,
-        provisionKey: input.idempotencyKey ?? null,
-        provisionRequestHash: input.requestHash ?? null,
         organizationId: organization.id,
         slug,
         name: input.displayName,
@@ -137,6 +135,10 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
         lifeosBusinessId: input.trustId?.businessPublicId ?? input.distributorTenantId,
         logoUrl: input.brand?.logoUrl,
         primaryColor: input.brand?.primaryColor ?? ECOMMERCEOS_MANIFEST.brandDefaults.primaryColor,
+        // Created with the store in one transaction: one store per install.
+        portalInstall: input.installId
+          ? { create: { installId: input.installId, provisionKey: input.idempotencyKey ?? null, requestHash: input.requestHash ?? null } }
+          : undefined,
         settings: {
           distributorTenantId: input.distributorTenantId,
           customDomain: input.customDomain ?? null,
@@ -164,7 +166,7 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
     if ((err as { code?: string }).code !== "P2002") throw err;
     // A concurrent request created the store (or holds the install or the handle) first.
     if (input.idempotencyKey) {
-      const prior = await prisma.tenant.findUnique({ where: { provisionKey: input.idempotencyKey } });
+      const prior = await prisma.portalInstall.findUnique({ where: { provisionKey: input.idempotencyKey } });
       if (prior) return replayIdempotent(prior, input);
     }
     const raced = await prisma.tenant.findUnique({ where: { slug } });
@@ -236,7 +238,7 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
   return {
     ok: true as const,
     tenantId: tenant.id,
-    installId: tenant.portalInstallId ?? input.distributorTenantId,
+    installId: input.installId ?? input.distributorTenantId,
     businessId: tenant.lifeosBusinessId,
     storefrontUrl,
     adminConsoleUrl,
@@ -288,11 +290,11 @@ function ownerCredentials(
 }
 
 /** The same install request again: replay the store; a different request with the same key is refused. */
-async function replayIdempotent(prior: { id: string; provisionRequestHash: string | null }, input: ProvisionTenantInput) {
-  if (prior.provisionRequestHash !== (input.requestHash ?? null)) {
+async function replayIdempotent(prior: { tenantId: string; requestHash: string | null }, input: ProvisionTenantInput) {
+  if (prior.requestHash !== (input.requestHash ?? null)) {
     throw httpError(409, "idempotency_conflict", "This Idempotency-Key was used for a different request.");
   }
-  const replay = input.owner?.subject ? await replayForOwner(prior.id, input.owner.subject) : await replayForOwner(prior.id);
+  const replay = input.owner?.subject ? await replayForOwner(prior.tenantId, input.owner.subject) : await replayForOwner(prior.tenantId);
   // Still being created by the first request: retry shortly (not a terminal conflict).
   if (!replay) throw httpError(503, "provision_in_progress", "This store is still being set up. Retry shortly.");
   return replay;
@@ -305,7 +307,7 @@ async function replayForOwner(tenantId: string, ownerSubject?: string) {
   if (!owner) return null;
   const tenant = await prisma.tenant.findUnique({
     where: { id: tenantId },
-    include: { storeConfig: true, modules: { where: { enabled: true } } },
+    include: { storeConfig: true, modules: { where: { enabled: true } }, portalInstall: true },
   });
   if (!tenant) return null;
   const settings =
@@ -318,7 +320,7 @@ async function replayForOwner(tenantId: string, ownerSubject?: string) {
     ok: true as const,
     replayed: true as const,
     tenantId: tenant.id,
-    installId: tenant.portalInstallId ?? (settings.distributorTenantId as string | undefined) ?? null,
+    installId: tenant.portalInstall?.installId ?? (settings.distributorTenantId as string | undefined) ?? null,
     businessId: tenant.lifeosBusinessId,
     storefrontUrl,
     adminConsoleUrl,

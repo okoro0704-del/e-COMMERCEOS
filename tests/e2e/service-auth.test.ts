@@ -194,7 +194,7 @@ test("Portal-signed provisioning creates exactly one store, bound to install, bu
   assert.equal(created.json().installId, installId);
   assert.equal(created.json().businessId, `biz_${installId}`);
   assert.equal(created.json().credentialSetup, "portal_handoff", "no owner password crosses the boundary");
-  assert.equal(await prisma.tenant.count({ where: { portalInstallId: installId } }), 1);
+  assert.equal(await prisma.tenant.count({ where: { portalInstall: { is: { installId } } } }), 1);
 
   const status = await signedCall("GET", `/internal/ecommerceos/stores/${subdomain}`, undefined).res;
   assert.equal(status.statusCode, 200, status.body);
@@ -212,7 +212,7 @@ test("duplicate setup requests create no duplicate store, sequentially or concur
   const all = await Promise.all([1, 2, 3, 4].map(() => signedCall("POST", "/internal/distributor/provision", body, { idk }).res));
   const codes = all.map((r) => r.statusCode);
   assert.ok(codes.includes(201) && codes.every((c) => [201, 200, 503].includes(c)), all.map((r) => `${r.statusCode} ${r.json().error ?? ""} ${r.json().message ?? ""}`).join(" | "));
-  assert.equal(await prisma.tenant.count({ where: { portalInstallId: installId } }), 1, "one store for the install");
+  assert.equal(await prisma.tenant.count({ where: { portalInstall: { is: { installId } } } }), 1, "one store for the install");
   // The response was "lost": the identical request returns the same store as a replay.
   const replay = await signedCall("POST", "/internal/distributor/provision", body, { idk }).res;
   assert.equal(replay.statusCode, 200, replay.body);
@@ -227,7 +227,7 @@ test("concurrent duplicates of one install never get a terminal conflict (a requ
     const all = await Promise.all([1, 2, 3, 4, 5, 6].map(() => signedCall("POST", "/internal/distributor/provision", body, { idk: `portal-install:${installId}` }).res));
     const outcomes = all.map((r) => `${r.statusCode} ${r.json().error ?? ""}`.trim());
     assert.ok(outcomes.every((o) => o === "201" || o === "200" || o === "503 provision_in_progress"), outcomes.join(" | "));
-    assert.equal(await prisma.tenant.count({ where: { portalInstallId: installId } }), 1);
+    assert.equal(await prisma.tenant.count({ where: { portalInstall: { is: { installId } } } }), 1);
   }
 });
 
@@ -248,8 +248,8 @@ test("the same key for another request, a key naming another install, and anothe
   assert.equal(takeover.json().error, "conflict");
   const sameOwnerOtherInstall = await signedCall("POST", "/internal/distributor/provision", provisionBody(rival, subdomain, "trustid:owner-3"), { idk: `portal-install:${rival}` }).res;
   assert.equal(sameOwnerOtherInstall.statusCode, 409, "a second install cannot claim the first install's store");
-  const tenant = await prisma.tenant.findUniqueOrThrow({ where: { slug: subdomain }, include: { staff: true } });
-  assert.equal(tenant.portalInstallId, installId, "the original install keeps its store");
+  const tenant = await prisma.tenant.findUniqueOrThrow({ where: { slug: subdomain }, include: { staff: true, portalInstall: true } });
+  assert.equal(tenant.portalInstall?.installId, installId, "the original install keeps its store");
   assert.equal(tenant.staff.find((s) => s.role === "owner")?.trustId, "trustid:owner-3");
 });
 
@@ -265,7 +265,8 @@ test("failed provisioning keeps nothing; the identical signed request then succe
   const failed = await signedCall("POST", "/internal/distributor/provision", body, { idk }).res;
   assert.equal(failed.statusCode, 500, failed.body);
   assert.equal(failed.json().error, "provision_failed");
-  assert.equal(await prisma.tenant.count({ where: { portalInstallId: installId } }), 0, "nothing kept, the key is free again");
+  assert.equal(await prisma.tenant.count({ where: { portalInstall: { is: { installId } } } }), 0, "nothing kept");
+  assert.equal(await prisma.portalInstall.count({ where: { installId } }), 0, "the install and its key are free again");
   await prisma.tenant.delete({ where: { id: blocker.id } });
   assert.equal((await signedCall("POST", "/internal/distributor/provision", body, { idk }).res).statusCode, 201);
 });

@@ -151,7 +151,7 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
     const { subdomain } = z.object({ subdomain: z.string().min(1).max(100) }).parse(req.params);
     const tenant = await prisma.tenant.findUnique({
       where: { slug: subdomain.trim().toLowerCase() },
-      include: { storeConfig: true, staff: { where: { role: "owner", status: "active" } } },
+      include: { storeConfig: true, staff: { where: { role: "owner", status: "active" } }, portalInstall: true },
     });
     if (!tenant) return reply.code(404).send({ error: "not_found", message: "Store not found" });
     return {
@@ -161,7 +161,7 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
       provisioned: Boolean(tenant.storeConfig),
       ownerBound: tenant.staff.some((s) => Boolean(s.trustId)),
       // Bindings Portal checks against its own record.
-      installId: tenant.portalInstallId ?? settingsOf(tenant.settings).distributorTenantId ?? null,
+      installId: tenant.portalInstall?.installId ?? settingsOf(tenant.settings).distributorTenantId ?? null,
       businessId: tenant.lifeosBusinessId,
       ownerSubject: tenant.staff.find((s) => s.trustId)?.trustId ?? null,
       activation: {
