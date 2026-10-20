@@ -6,7 +6,7 @@ import { jtiDigest, parseTrustedServices, ServiceTokenError, verifyServiceToken,
 import { requireInternalToken } from "../routes/internal/provision.js";
 
 /** Permissions eCommerceOS grants to calling services (assigned per issuer in ECO_TRUSTED_SERVICES). */
-export const SERVICE_PERMISSIONS = ["stores:provision", "stores:admin-handoff", "stores:read"] as const;
+export const SERVICE_PERMISSIONS = ["stores:provision", "stores:admin-handoff", "stores:read", "stores:bind-business"] as const;
 export type ServicePermission = (typeof SERVICE_PERMISSIONS)[number];
 
 let trustedCache: { raw: string; trusted: TrustedServices } | null = null;

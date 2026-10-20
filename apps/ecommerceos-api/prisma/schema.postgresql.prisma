@@ -34,6 +34,8 @@ model Tenant {
   settings           Json
   /// legacy: created before paid activation (open); pending: awaiting a verified setup payment; active: verified.
   activationStatus   String   @default("legacy")
+  /// Counts activation changes; each change is reported to Portal as event <version> (0: none yet).
+  activationVersion  Int      @default(0)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -53,6 +55,7 @@ model Tenant {
   auditLogs    AuditLog[]
   activations  Activation[]
   portalInstall PortalInstall?
+  activationEvents ActivationEvent[]
 
   @@index([organizationId])
   @@index([status])
@@ -614,6 +617,32 @@ model PortalInstall {
   createdAt    DateTime @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+/// Outbox of store activation changes reported to LifeOS Portal, written in the same transaction as the
+/// change. version is per store and gap-free, so Portal can order events, ignore duplicates and late
+/// arrivals, and detect a missing one. body holds the exact bytes sent, so a re-send is a replay.
+model ActivationEvent {
+  id            String    @id
+  tenantId      String
+  version       Int
+  status        String
+  cause         String
+  occurredAt    DateTime
+  body          String
+  /// pending | delivered | failed (retryable) | rejected (Portal refused it) | conflict (operator)
+  delivery      String    @default("pending")
+  httpStatus    Int?
+  attempts      Int       @default(0)
+  lastError     String?
+  lastAttemptAt DateTime?
+  deliveredAt   DateTime?
+  createdAt     DateTime  @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, version])
+  @@index([delivery])
 }
 
 model ServiceTokenUse {

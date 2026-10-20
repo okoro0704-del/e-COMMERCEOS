@@ -38,7 +38,16 @@ const rawX = (k: KeyObject) => (k.export({ format: "jwk" }) as { x: string }).x;
 let app: FastifyInstance;
 let prisma: PrismaClient;
 let sign: typeof import("../../apps/ecommerceos-api/src/lib/service-token.ts").signServiceToken;
-let stub: { server: http.Server; port: number; installs: Map<string, string>; calls: Array<{ status: number; replay: boolean }>; mode: "ok" | "fail-after-record" };
+type StubEvent = { eventId: string; version: number; tenantId: string; installId: string | null; businessId: string | null; subdomain: string; status: string; cause: string };
+let stub: {
+  server: http.Server;
+  port: number;
+  installs: Map<string, string>;
+  calls: Array<{ status: number; replay: boolean }>;
+  mode: "ok" | "fail-after-record";
+  /** Portal's activation receiver, by its agreed rules: apply only a higher version per store. */
+  activations: { events: Map<string, StubEvent>; byTenant: Map<string, { version: number; status: string }>; mode: "ok" | "fail" | "conflict" };
+};
 let operatorToken: string;
 
 function startStub() {
@@ -46,6 +55,7 @@ function startStub() {
     const installs = new Map<string, string>();
     const calls: Array<{ status: number; replay: boolean }> = [];
     const state = { mode: "ok" as "ok" | "fail-after-record" };
+    const activations = { events: new Map<string, StubEvent>(), byTenant: new Map<string, { version: number; status: string }>(), mode: "ok" as "ok" | "fail" | "conflict" };
     const server = http.createServer(async (req, res) => {
       const chunks: Buffer[] = [];
       for await (const c of req) chunks.push(c as Buffer);
@@ -56,21 +66,38 @@ function startStub() {
         res.writeHead(status, { "content-type": "application/json" });
         res.end(JSON.stringify(json));
       };
+      const path = (req.url ?? "").split("?")[0]!;
+      const isActivation = path === "/internal/ecommerceos/activation-events";
       try {
         await verifyServiceToken({
           authorization: req.headers.authorization,
           idempotencyKey: req.headers["idempotency-key"] as string | undefined,
           method: req.method ?? "",
-          path: (req.url ?? "").split("?")[0]!,
+          path,
           body,
           audience: "lifeos-portal",
-          permission: "marketplace:seller-install",
-          trusted: parseTrustedServices(JSON.stringify({ ecommerceos: { permissions: ["marketplace:seller-install"], keys: { "eco-test-1": rawX(ecoKey.publicKey) } } })),
+          permission: isActivation ? "activation:report" : "marketplace:seller-install",
+          trusted: parseTrustedServices(JSON.stringify({ ecommerceos: { permissions: ["marketplace:seller-install", "activation:report"], keys: { "eco-test-1": rawX(ecoKey.publicKey) } } })),
           production: false,
           consumeJti: async (i, j) => (used.has(i + j) ? false : (used.add(i + j), true)),
         });
       } catch (err) {
         return reply((err as { statusCode?: number }).statusCode ?? 401, { error: (err as Error).message });
+      }
+      if (isActivation) {
+        const ev = JSON.parse(body.toString()) as StubEvent;
+        if (req.headers["idempotency-key"] !== `eco-activation:${ev.eventId}`) return reply(422, { error: "idempotency_key_mismatch" });
+        if (activations.mode === "fail") return reply(503, { error: "unavailable" });
+        if (activations.mode === "conflict") return reply(409, { error: "activation_conflict" });
+        if (activations.events.has(ev.eventId)) return reply(200, { ok: true, replayed: true });
+        const current = activations.byTenant.get(ev.tenantId);
+        if (current && current.version === ev.version && current.status !== ev.status) return reply(409, { error: "activation_conflict" });
+        activations.events.set(ev.eventId, ev);
+        if (!current || ev.version > current.version) {
+          activations.byTenant.set(ev.tenantId, { version: ev.version, status: ev.status });
+          return reply(200, { ok: true, applied: true });
+        }
+        return reply(200, { ok: true, applied: false });
       }
       const parsed = JSON.parse(body.toString()) as { applicationId: string };
       if (req.headers["idempotency-key"] !== `eco-seller:${parsed.applicationId}`) return reply(422, { error: "idempotency_key_mismatch" });
@@ -84,7 +111,7 @@ function startStub() {
     });
     server.listen(0, "127.0.0.1", () => {
       const port = (server.address() as { port: number }).port;
-      resolve({ server, port, installs, calls, get mode() { return state.mode; }, set mode(v) { state.mode = v; } } as typeof stub);
+      resolve({ server, port, installs, calls, activations, get mode() { return state.mode; }, set mode(v) { state.mode = v; } } as typeof stub);
     });
   });
 }
@@ -108,7 +135,7 @@ before(async () => {
   process.env.ECO_OPERATOR_MFA_KEY = "service-auth-e2e-operator-mfa-key-0123456789";
   process.env.ECO_SERVICE_AUTH_MODE = "signed";
   process.env.ECO_TRUSTED_SERVICES = JSON.stringify({
-    "lifeos-portal": { permissions: ["stores:provision", "stores:admin-handoff", "stores:read"], keys: { "portal-test-1": rawX(portalKey.publicKey) } },
+    "lifeos-portal": { permissions: ["stores:provision", "stores:admin-handoff", "stores:read", "stores:bind-business"], keys: { "portal-test-1": rawX(portalKey.publicKey) } },
     "status-reader": { permissions: ["stores:read"], keys: { "reader-test-1": rawX(readerKey.publicKey) } },
   });
   process.env.ECO_SERVICE_SIGNING_KEY = (ecoKey.privateKey.export({ type: "pkcs8", format: "der" }) as Buffer).toString("base64url");
@@ -202,7 +229,9 @@ test("Portal-signed provisioning creates exactly one store, bound to install, bu
     { installId: status.json().installId, businessId: status.json().businessId, ownerSubject: status.json().ownerSubject, tenantId: status.json().tenantId },
     { installId, businessId: `biz_${installId}`, ownerSubject: "trustid:owner-1", tenantId: created.json().tenantId },
   );
-  assert.deepEqual(status.json().activation, { required: false, status: "legacy", storeOpen: true });
+  const { updatedAt, ...activation } = status.json().activation;
+  assert.deepEqual(activation, { required: false, status: "legacy", storeOpen: true, version: 1 });
+  assert.equal(typeof updatedAt, "string");
 });
 
 test("duplicate setup requests create no duplicate store, sequentially or concurrently; a timed-out request is reconciled by replay", async () => {
@@ -443,4 +472,133 @@ test("seller registrations reach Portal signed and exactly once; failures are re
   assert.equal(backfill3.json().attempted, 0, "nothing left to send");
   assert.equal((await app.inject({ method: "POST", url: "/v1/platform/portal/seller-registrations/backfill" })).statusCode, 401, "backfill needs an operator session");
   assert.equal(await prisma.auditLog.count({ where: { action: "platform.seller_registration_backfill" } }), 3);
+});
+
+// ---- Activation sync and the stable business id -------------------------------------------------
+
+async function delivered(tenantId: string, version: number) {
+  for (let i = 0; i < 50; i += 1) {
+    const row = await prisma.activationEvent.findUnique({ where: { tenantId_version: { tenantId, version } } });
+    if (row && row.delivery !== "pending") return row;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return prisma.activationEvent.findUnique({ where: { tenantId_version: { tenantId, version } } });
+}
+
+test("a new store reports its activation to Portal as version 1, signed, and never as paid", async () => {
+  const installId = handle("ins");
+  const subdomain = handle("act");
+  const created = await signedCall("POST", "/internal/distributor/provision", provisionBody(installId, subdomain, "trustid:owner-act"), { idk: `portal-install:${installId}` }).res;
+  assert.equal(created.statusCode, 201, created.body);
+  const tenantId = created.json().tenantId as string;
+  const row = await delivered(tenantId, 1);
+  assert.equal(row?.delivery, "delivered", row?.lastError ?? "");
+  const ev = stub.activations.events.get(row!.id)!;
+  assert.deepEqual(
+    { version: ev.version, tenantId: ev.tenantId, installId: ev.installId, businessId: ev.businessId, subdomain: ev.subdomain, status: ev.status, cause: ev.cause },
+    { version: 1, tenantId, installId, businessId: `biz_${installId}`, subdomain, status: "legacy", cause: "created" },
+  );
+  assert.notEqual(ev.status, "active", "creating a store never reports it as paid");
+  const status = await signedCall("GET", `/internal/ecommerceos/stores/${subdomain}`, undefined).res;
+  assert.equal(status.json().activation.version, 1);
+  assert.equal(typeof status.json().activation.updatedAt, "string");
+});
+
+test("each activation change takes the next version with it; failed deliveries are honest and re-sent in order; a conflict waits for an operator", async () => {
+  const { changeActivationStatus, sendActivationEvent } = await import("../../apps/ecommerceos-api/src/services/activation-events.ts");
+  const installId = handle("ins");
+  const subdomain = handle("actv");
+  const created = await signedCall("POST", "/internal/distributor/provision", provisionBody(installId, subdomain, "trustid:owner-actv"), { idk: `portal-install:${installId}` }).res;
+  const tenantId = created.json().tenantId as string;
+  assert.equal((await delivered(tenantId, 1))?.delivery, "delivered");
+
+  stub.activations.mode = "fail";
+  const v2 = await prisma.$transaction((tx) => changeActivationStatus(tx, tenantId, "active", "verified"));
+  const v3 = await prisma.$transaction((tx) => changeActivationStatus(tx, tenantId, "legacy", "reversed", "active"));
+  const notActive = await prisma.$transaction((tx) => changeActivationStatus(tx, tenantId, "legacy", "reversed", "active"));
+  assert.equal(notActive, null, "a guarded change that does not apply records nothing");
+  assert.equal(await sendActivationEvent(v3!), "failed", "Portal unavailable: recorded as failed, not delivered");
+  assert.equal(await sendActivationEvent(v2!), "failed");
+  const rows = await prisma.activationEvent.findMany({ where: { tenantId }, orderBy: { version: "asc" } });
+  assert.deepEqual(rows.map((r) => [r.version, r.status, r.cause]), [[1, "legacy", "created"], [2, "active", "verified"], [3, "legacy", "reversed"]]);
+  assert.equal((await prisma.tenant.findUniqueOrThrow({ where: { id: tenantId } })).activationVersion, 3);
+
+  stub.activations.mode = "ok";
+  const resend = await app.inject({ method: "POST", url: "/v1/platform/portal/activation-events/resend", headers: { authorization: `Bearer ${operatorToken}` } });
+  assert.equal(resend.statusCode, 200, resend.body);
+  assert.ok(resend.json().delivered >= 2, resend.body);
+  assert.deepEqual(stub.activations.byTenant.get(tenantId), { version: 3, status: "legacy" }, "Portal ends on the latest version");
+  const again = await app.inject({ method: "POST", url: "/v1/platform/portal/activation-events/resend", headers: { authorization: `Bearer ${operatorToken}` } });
+  assert.equal((await prisma.activationEvent.findUniqueOrThrow({ where: { id: v2! } })).attempts, 2, `delivered events are not re-sent: ${again.body}`);
+
+  stub.activations.mode = "conflict";
+  const v4 = await prisma.$transaction((tx) => changeActivationStatus(tx, tenantId, "active", "verified"));
+  assert.equal(await sendActivationEvent(v4!), "conflict");
+  stub.activations.mode = "ok";
+  await app.inject({ method: "POST", url: "/v1/platform/portal/activation-events/resend", headers: { authorization: `Bearer ${operatorToken}` } });
+  assert.equal((await prisma.activationEvent.findUniqueOrThrow({ where: { id: v4! } })).attempts, 1, "a conflict is left for an operator");
+  // Refused by Portal (for example before its receiver existed): not re-sent until asked.
+  stub.activations.mode = "fail";
+  const v5Status = await prisma.$transaction((tx) => changeActivationStatus(tx, tenantId, "legacy", "reversed", "active"));
+  stub.server.close();
+  await new Promise((r) => setTimeout(r, 100));
+  await new Promise<void>((resolve) => stub.server.listen(stub.port, "127.0.0.1", () => resolve()));
+  stub.activations.mode = "ok";
+  await prisma.activationEvent.update({ where: { id: v5Status! }, data: { delivery: "rejected", httpStatus: 403, lastError: "permission_denied" } });
+  await app.inject({ method: "POST", url: "/v1/platform/portal/activation-events/resend", headers: { authorization: `Bearer ${operatorToken}` } });
+  assert.equal((await prisma.activationEvent.findUniqueOrThrow({ where: { id: v5Status! } })).delivery, "rejected", "a rejected event is not re-sent by default");
+  const withRejected = await app.inject({ method: "POST", url: "/v1/platform/portal/activation-events/resend?include=rejected", headers: { authorization: `Bearer ${operatorToken}` } });
+  assert.equal(withRejected.json().includeRejected, true, withRejected.body);
+  assert.equal((await prisma.activationEvent.findUniqueOrThrow({ where: { id: v5Status! } })).delivery, "delivered", "re-sent once asked");
+  assert.equal((await prisma.activationEvent.findUniqueOrThrow({ where: { id: v4! } })).delivery, "conflict", "a conflict is still left for an operator");
+  const list = await app.inject({ method: "GET", url: "/v1/platform/portal/activation-events", headers: { authorization: `Bearer ${operatorToken}` } });
+  assert.ok((list.json().events as Array<{ eventId: string; delivery: string }>).some((e) => e.eventId === v4 && e.delivery === "conflict"));
+});
+
+test("the business id is Portal's, stored verbatim, never derived; an older store binds its stable id once", async () => {
+  const bindUrl = (sub: string) => `/internal/ecommerceos/stores/${sub}/business`;
+  // Explicit and stable.
+  const i1 = handle("ins");
+  const s1 = handle("biz");
+  const { trustId: _alias, ...withoutAlias } = provisionBody(i1, s1, "trustid:owner-b1");
+  const stable = await signedCall("POST", "/internal/distributor/provision", { ...withoutAlias, businessId: "bus_stable_1" }, { idk: `portal-install:${i1}` }).res;
+  assert.equal(stable.statusCode, 201, stable.body);
+  assert.equal(stable.json().businessId, "bus_stable_1");
+  assert.equal((await signedCall("GET", `/internal/ecommerceos/stores/${s1}`, undefined).res).json().businessId, "bus_stable_1");
+  // The older alias may not contradict it.
+  const i2 = handle("ins");
+  const mismatch = await signedCall("POST", "/internal/distributor/provision", { ...provisionBody(i2, handle("biz"), "trustid:owner-b2"), businessId: "bus_other" }, { idk: `portal-install:${i2}` }).res;
+  assert.equal(mismatch.statusCode, 400, mismatch.body);
+  assert.equal(mismatch.json().error, "business_id_mismatch");
+  // Older stores: a subdomain-derived value is not a business id, and can be bound once.
+  const i3 = handle("ins");
+  const s3 = handle("biz");
+  const owner3 = "trustid:owner-b3";
+  const legacy = await signedCall("POST", "/internal/distributor/provision", { ...provisionBody(i3, s3, owner3), trustId: { businessPublicId: `biz_${s3}` } }, { idk: `portal-install:${i3}` }).res;
+  assert.equal(legacy.statusCode, 201, legacy.body);
+  assert.equal(legacy.json().businessId, null);
+  const bindBody = JSON.stringify({ businessId: "bus_stable_3", installId: i3, ownerSubject: owner3 });
+  const readerToken = sign({ issuer: "status-reader", kid: "reader-test-1", key: readerKey.privateKey, audience: "ecommerceos", method: "POST", path: bindUrl(s3), body: bindBody });
+  const asReader = await app.inject({ method: "POST", url: bindUrl(s3), headers: { authorization: `Bearer ${readerToken}`, "content-type": "application/json" }, payload: bindBody });
+  assert.equal(asReader.statusCode, 403, "binding needs stores:bind-business");
+  assert.equal((await signedCall("POST", bindUrl(s3), { businessId: "bus_stable_3", installId: "ins_other", ownerSubject: owner3 }).res).json().error, "install_mismatch");
+  assert.equal((await signedCall("POST", bindUrl(s3), { businessId: "bus_stable_3", installId: i3, ownerSubject: "trustid:intruder" }).res).json().error, "owner_mismatch");
+  const bound = await signedCall("POST", bindUrl(s3), { businessId: "bus_stable_3", installId: i3, ownerSubject: owner3 }).res;
+  assert.equal(bound.statusCode, 200, bound.body);
+  assert.equal(bound.json().bound, true);
+  assert.equal((await signedCall("GET", `/internal/ecommerceos/stores/${s3}`, undefined).res).json().businessId, "bus_stable_3");
+  assert.equal((await signedCall("POST", bindUrl(s3), { businessId: "bus_stable_3", installId: i3, ownerSubject: owner3 }).res).json().replayed, true);
+  const rebind = await signedCall("POST", bindUrl(s3), { businessId: "bus_other", installId: i3, ownerSubject: owner3 }).res;
+  assert.equal(rebind.statusCode, 409);
+  assert.equal(rebind.json().error, "business_id_conflict", "a bound business id never changes");
+  assert.equal((await signedCall("POST", bindUrl(s1), { businessId: "bus_other", installId: i1, ownerSubject: "trustid:owner-b1" }).res).statusCode, 409);
+  // A store from before install binding, whose install id was stored as its business id.
+  const s4 = handle("biz");
+  const old = await signedCall("POST", "/internal/distributor/provision", { ...withoutAlias, tenantId: `tid_${s4}`, installId: undefined, subdomain: s4, owner: { subject: "trustid:owner-b4" } }).res;
+  assert.equal(old.statusCode, 201, old.body);
+  await prisma.tenant.update({ where: { id: old.json().tenantId }, data: { lifeosBusinessId: `tid_${s4}` } });
+  assert.equal((await signedCall("GET", `/internal/ecommerceos/stores/${s4}`, undefined).res).json().businessId, null);
+  assert.equal((await signedCall("POST", bindUrl(s4), { businessId: "bus_stable_4", installId: `tid_${s4}`, ownerSubject: "trustid:owner-b4" }).res).statusCode, 200);
+  const audit = await app.inject({ method: "GET", url: "/v1/platform/audit?limit=500", headers: { authorization: `Bearer ${operatorToken}` } });
+  assert.equal((audit.json().entries as Array<{ action: string }>).filter((e) => e.action === "portal.business_bound").length, 2);
 });

@@ -8,6 +8,8 @@ import { writeAudit } from "../../lib/audit.js";
 import { seedStoreDefaults } from "./provision-seed.js";
 import { getDistributorProvider, getLifeOsPrimitives } from "../lifeos/container.js";
 import { initialActivationStatus } from "../activation.js";
+import { recordInitialActivation, sendActivationEventsInBackground } from "../activation-events.js";
+import { businessIdOf, installIdOf } from "../store-identity.js";
 
 export type ProvisionTenantInput = {
   distributorTenantId: string;
@@ -26,6 +28,8 @@ export type ProvisionTenantInput = {
   modules?: string[];
   seed?: "default" | "none";
   trustId?: { audience?: string; businessPublicId?: string };
+  /** The LifeOS business this store belongs to: minted by Portal, immutable, never derived here. */
+  businessId?: string;
   adminStaff?: {
     email: string;
     displayName: string;
@@ -132,7 +136,7 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
         businessType: preset.id,
         status: "active",
         activationStatus: initialActivationStatus(),
-        lifeosBusinessId: input.trustId?.businessPublicId ?? input.distributorTenantId,
+        lifeosBusinessId: input.businessId ?? input.trustId?.businessPublicId ?? null,
         logoUrl: input.brand?.logoUrl,
         primaryColor: input.brand?.primaryColor ?? ECOMMERCEOS_MANIFEST.brandDefaults.primaryColor,
         // Created with the store in one transaction: one store per install.
@@ -178,6 +182,7 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
   const adminEmail = (input.adminStaff?.email ?? `owner@${slug}.commerce.local`).trim().toLowerCase();
   const credentials = ownerCredentials(input, adminEmail);
   let staff: Awaited<ReturnType<typeof prisma.staffMember.create>>;
+  let activationEventId: string | undefined;
   // Undo a half-created store if any later step fails, so the same request can simply be retried
   // (otherwise the handle stays taken with no owner and every retry is refused as a conflict).
   try {
@@ -211,6 +216,9 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
       });
     }
 
+    // Version 1 for Portal: the store's initial activation status, which never means paid.
+    activationEventId = await recordInitialActivation(tenant.id);
+
     await writeAudit({
       tenantId: tenant.id,
       actorKind: "system",
@@ -232,6 +240,7 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
     throw err;
   }
 
+  sendActivationEventsInBackground([activationEventId]);
   const storefrontUrl = launchUrl(config.storefrontLaunchUrlTemplate, slug);
   const adminConsoleUrl = launchUrl(config.adminLaunchUrlTemplate, slug);
 
@@ -239,7 +248,7 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
     ok: true as const,
     tenantId: tenant.id,
     installId: input.installId ?? input.distributorTenantId,
-    businessId: tenant.lifeosBusinessId,
+    businessId: businessIdOf(tenant),
     storefrontUrl,
     adminConsoleUrl,
     organizationId: organization.id,
@@ -320,8 +329,8 @@ async function replayForOwner(tenantId: string, ownerSubject?: string) {
     ok: true as const,
     replayed: true as const,
     tenantId: tenant.id,
-    installId: tenant.portalInstall?.installId ?? (settings.distributorTenantId as string | undefined) ?? null,
-    businessId: tenant.lifeosBusinessId,
+    installId: installIdOf(tenant),
+    businessId: businessIdOf(tenant),
     storefrontUrl,
     adminConsoleUrl,
     organizationId: tenant.organizationId,

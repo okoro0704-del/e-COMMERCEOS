@@ -71,7 +71,12 @@ async function record(applicationId: string, status: Outcome, detail: { httpStat
   return status;
 }
 
-function authorizationFor(path: string, body: string, idempotencyKey: string): string | null {
+/**
+ * The Authorization header for a call to Portal: a token signed with eCommerceOS's key, bound to this
+ * path, body and Idempotency-Key. Only seller registration, which predates the signed contract, may
+ * fall back to the shared token in shared mode; every newer call is signed or not sent.
+ */
+export function portalAuthorization(path: string, body: string, idempotencyKey: string, opts: { sharedFallback?: boolean } = {}): string | null {
   const key = config.serviceSigningKey ? loadSigningKey(config.serviceSigningKey) : null;
   if (key && config.serviceSigningKid) {
     const token = signServiceToken({
@@ -86,8 +91,8 @@ function authorizationFor(path: string, body: string, idempotencyKey: string): s
     });
     return `Bearer ${token}`;
   }
-  // Before the joint release the shared token is still how Portal accepts this call.
-  return config.serviceAuthMode === "shared" ? `Bearer ${config.portalInternalToken}` : null;
+  // Before the joint release the shared token is still how Portal accepts a seller registration.
+  return opts.sharedFallback && config.serviceAuthMode === "shared" ? `Bearer ${config.portalInternalToken}` : null;
 }
 
 /** Sends (or re-sends) one stored registration. A registered or conflicting one is left alone. */
@@ -98,7 +103,7 @@ async function sendRegistration(applicationId: string): Promise<Outcome> {
   if (!config.portalApiUrl) return record(applicationId, "pending", { error: "portal_api_unconfigured", attempted: false });
   const target = new URL(`${config.portalApiUrl}${SELLER_INSTALL_PATH}`);
   const idempotencyKey = `eco-seller:${applicationId}`;
-  const authorization = authorizationFor(target.pathname, row.body, idempotencyKey);
+  const authorization = portalAuthorization(target.pathname, row.body, idempotencyKey, { sharedFallback: true });
   if (!authorization) return record(applicationId, "failed", { error: "signing_unconfigured", attempted: false });
   try {
     const res = await fetch(target, {

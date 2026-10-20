@@ -12,6 +12,7 @@ import {
 } from "../lib/crypto.js";
 import { isCompromisedPassword, passwordProblem } from "../lib/password-policy.js";
 import { createFailureThrottle } from "../lib/login-throttle.js";
+import { installIdOf } from "./store-identity.js";
 import { writeAudit } from "../lib/audit.js";
 
 /** Single-use Portal → store admin handoff codes and password reset grants live as short StaffSession rows. */
@@ -244,9 +245,7 @@ export async function createAdminHandoff(opts: {
   if (!tenant || tenant.status !== "active") throw httpError(404, "not_found", "Store not found");
   if (opts.tenantId && opts.tenantId !== tenant.id) throw httpError(409, "tenant_mismatch", "Store does not match");
   if (opts.installId) {
-    const settings = tenant.settings && typeof tenant.settings === "object" ? (tenant.settings as Record<string, unknown>) : {};
-    const boundInstall = tenant.portalInstall?.installId ?? settings.distributorTenantId;
-    if (boundInstall !== opts.installId) throw httpError(403, "install_mismatch", "This store belongs to another install.");
+    if (installIdOf(tenant) !== opts.installId) throw httpError(403, "install_mismatch", "This store belongs to another install.");
   }
 
   const owners = tenant.staff.filter((s) => s.role === "owner" && s.status === "active");
