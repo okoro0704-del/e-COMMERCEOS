@@ -1,10 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { config } from "../../config.js";
 import { provisionEcommerceTenant } from "../../services/distributor/provision-tenant.js";
 import { storeOpenForBuyers } from "../../services/activation.js";
 import { prisma } from "../../db.js";
+import { authorizeService } from "../../lib/service-auth.js";
 
 function bearerEquals(provided: string, expected: string): boolean {
   const a = Buffer.from(provided);
@@ -25,17 +26,14 @@ export function requireInternalToken(authHeader: string | undefined): boolean {
  */
 export async function registerInternalProvisionRoutes(app: FastifyInstance) {
   app.post("/internal/distributor/provision", async (req, reply) => {
-    if (!requireInternalToken(req.headers.authorization)) {
-      return reply.code(401).send({
-        error: "unauthorized",
-        message: "Valid service bearer token required",
-      });
-    }
+    if (!(await authorizeService(req, reply, "stores:provision"))) return;
 
     const body = z
       .object({
         distributorTenantId: z.string().min(1).optional(),
         tenantId: z.string().min(1).optional(),
+        /** LifeOS Portal install id; when absent, tenantId is taken as the install id. */
+        installId: z.string().min(1).max(128).optional(),
         subdomain: z.string().min(1).regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/i),
         slug: z.string().min(1).optional(),
         displayName: z.string().min(1),
@@ -94,8 +92,20 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
       })
       .parse(req.body);
 
+    // Idempotency-Key names the install: "portal-install:<installId, else tenantId>".
+    const header = req.headers["idempotency-key"];
+    const idempotencyKey = typeof header === "string" ? header : undefined;
+    const installRef = body.installId ?? body.tenantId ?? body.distributorTenantId;
+    if (idempotencyKey !== undefined && idempotencyKey !== `portal-install:${installRef}`) {
+      return reply.code(400).send({ error: "idempotency_key_mismatch", message: "Idempotency-Key must be portal-install:<install id>" });
+    }
+    const requestHash = createHash("sha256").update(canonicalJson(body)).digest("hex");
+
     try {
       const result = await provisionEcommerceTenant({
+        installId: body.installId ?? (idempotencyKey ? installRef : undefined),
+        idempotencyKey,
+        requestHash,
         distributorTenantId: body.distributorTenantId ?? body.tenantId!,
         tenantId: body.tenantId,
         subdomain: body.subdomain,
@@ -121,7 +131,8 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
       return reply.code("replayed" in result ? 200 : 201).send(result);
     } catch (err) {
       const e = err as { statusCode?: number; code?: string; message?: string };
-      if (!e.statusCode || e.statusCode >= 500) {
+      // A deliberate 503 (the same install is still being set up) passes through as retryable.
+      if (!e.statusCode || (e.statusCode >= 500 && e.statusCode !== 503)) {
         // Internal details stay in the log; nothing of a failed attempt is kept, so a retry is safe.
         req.log.error({ err }, "provisioning failed");
         return reply.code(500).send({
@@ -136,9 +147,7 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
 
   /** Provisioning and activation status of one store, for LifeOS Portal to poll. */
   app.get("/internal/ecommerceos/stores/:subdomain", async (req, reply) => {
-    if (!requireInternalToken(req.headers.authorization)) {
-      return reply.code(401).send({ error: "unauthorized", message: "Valid service bearer token required" });
-    }
+    if (!(await authorizeService(req, reply, "stores:read"))) return;
     const { subdomain } = z.object({ subdomain: z.string().min(1).max(100) }).parse(req.params);
     const tenant = await prisma.tenant.findUnique({
       where: { slug: subdomain.trim().toLowerCase() },
@@ -151,6 +160,10 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
       status: tenant.status,
       provisioned: Boolean(tenant.storeConfig),
       ownerBound: tenant.staff.some((s) => Boolean(s.trustId)),
+      // Bindings Portal checks against its own record.
+      installId: tenant.portalInstallId ?? settingsOf(tenant.settings).distributorTenantId ?? null,
+      businessId: tenant.lifeosBusinessId,
+      ownerSubject: tenant.staff.find((s) => s.trustId)?.trustId ?? null,
       activation: {
         required: config.activationRequired,
         status: tenant.activationStatus,
@@ -159,4 +172,20 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
       createdAt: tenant.createdAt.toISOString(),
     };
   });
+}
+
+function settingsOf(value: unknown): Record<string, string | undefined> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, string | undefined>) : {};
+}
+
+/** JSON with sorted keys, so the same request always has the same fingerprint. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value as object)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }

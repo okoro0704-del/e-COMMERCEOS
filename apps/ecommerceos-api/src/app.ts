@@ -1,4 +1,4 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
@@ -22,6 +22,15 @@ export async function buildApp() {
       if (typeof incoming === "string" && incoming.trim()) return incoming.trim();
       return randomUUID();
     },
+  });
+
+  // Keep the exact request bytes: signed service credentials bind the body hash to them. Parsing
+  // is still Fastify's own JSON parser, with prototype-poisoning protection.
+  const parseJson = app.getDefaultJsonParser("error", "error");
+  app.removeContentTypeParser("application/json");
+  app.addContentTypeParser("application/json", { parseAs: "buffer" }, (req, body, done) => {
+    (req as FastifyRequest & { rawBody?: Buffer }).rawBody = body as Buffer;
+    parseJson(req, (body as Buffer).toString("utf8"), done);
   });
 
   await app.register(cors, {

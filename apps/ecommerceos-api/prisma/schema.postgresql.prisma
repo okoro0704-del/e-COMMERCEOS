@@ -34,6 +34,11 @@ model Tenant {
   settings           Json
   /// legacy: created before paid activation (open); pending: awaiting a verified setup payment; active: verified.
   activationStatus   String   @default("legacy")
+  /// LifeOS Portal install this store was created for: one store per install.
+  portalInstallId    String?  @unique
+  /// Idempotency-Key of the provisioning request ("portal-install:<id>") and its request fingerprint.
+  provisionKey         String?  @unique
+  provisionRequestHash String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -597,6 +602,35 @@ model PlatformApproval {
   decisionNote  String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+
+  @@index([status])
+}
+
+/// Single-use record of every accepted service-token jti: hex SHA-256 of iss + "\n" + jti only.
+model ServiceTokenUse {
+  digest    String   @id
+  issuer    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+/// Registration of a marketplace-created seller store with LifeOS Portal, sent with a signed
+/// service token. The exact body is kept so a retry or backfill resends identical bytes.
+model PortalSellerRegistration {
+  applicationId       String    @id
+  sellerTenantId      String
+  marketplaceTenantId String
+  body                String
+  status              String    @default("pending")
+  httpStatus          Int?
+  attempts            Int       @default(0)
+  lastError           String?
+  lastAttemptAt       DateTime?
+  registeredAt        DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   @@index([status])
 }

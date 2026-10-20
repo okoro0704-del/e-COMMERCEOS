@@ -21,6 +21,7 @@ import {
   verifyMfaChallenge,
 } from "../services/platform-auth.js";
 import { decideApproval, listApprovals, requestReversal } from "../services/platform-approvals.js";
+import { backfillSellerRegistrations, listSellerRegistrations } from "../services/portal-registration.js";
 import {
   createPartner,
   listActivations,
@@ -198,6 +199,19 @@ export async function registerPlatformRoutes(app: FastifyInstance) {
     const { id, decision } = z.object({ id: z.string().min(1), decision: z.enum(["approve", "decline"]) }).parse(req.params);
     const body = z.object({ note: z.string().trim().max(500).optional() }).parse(req.body ?? {});
     return decideApproval(auth, id, decision, body.note);
+  });
+
+  // ---- LifeOS Portal seller registrations (admins) ------------------------------------------
+  app.get("/v1/platform/portal/seller-registrations", async (req, reply) => {
+    if (!(await requireOperator(req, reply, { roles: ["admin"] }))) return;
+    return listSellerRegistrations();
+  });
+
+  /** Re-sends unregistered seller stores to Portal; idempotent, so nothing is registered twice. */
+  app.post("/v1/platform/portal/seller-registrations/backfill", async (req, reply) => {
+    const auth = await requireOperator(req, reply, { roles: ["admin"] });
+    if (!auth) return;
+    return backfillSellerRegistrations(auth.operatorId);
   });
 
   // ---- Partners and commissions --------------------------------------------------------------

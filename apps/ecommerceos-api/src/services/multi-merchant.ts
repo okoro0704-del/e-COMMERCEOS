@@ -11,6 +11,7 @@ import { httpError } from "../lib/crypto.js";
 import { passwordProblem } from "../lib/password-policy.js";
 import { listCategories, listProducts, getProduct } from "./catalog.js";
 import { provisionEcommerceTenant } from "./distributor/provision-tenant.js";
+import { registerSellerWithPortal } from "./portal-registration.js";
 
 type TenantSettings = Record<string, unknown>;
 
@@ -135,33 +136,6 @@ function launchUrl(template: string, subdomain: string): string {
   return template.replaceAll("{subdomain}", subdomain);
 }
 
-async function registerSellerWithPortal(input: {
-  applicationId: string;
-  tenantId: string;
-  subdomain: string;
-  displayName: string;
-  marketplaceSubdomain: string;
-  organizationId?: string;
-}) {
-  if (!config.portalApiUrl) return;
-  try {
-    const res = await fetch(`${config.portalApiUrl}/internal/ecommerceos/seller-install`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.portalInternalToken}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(input),
-    });
-    if (!res.ok) {
-      console.warn(`portal seller-install ${res.status}`);
-    }
-  } catch (err) {
-    console.warn("portal seller-install failed", err);
-  }
-}
-
 function slugify(value: string): string {
   const slug = value
     .toLowerCase()
@@ -281,6 +255,7 @@ export async function createSellerOnlineStore(
     subdomain: provisioned.slug,
     displayName: input.displayName,
     marketplaceSubdomain: marketplace.slug,
+    marketplaceTenantId,
     organizationId: organization?.id,
   });
 

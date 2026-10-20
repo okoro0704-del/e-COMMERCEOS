@@ -1,5 +1,6 @@
 import type { AppEnv } from "../config.js";
 import { unsafeProductionOrigins } from "./cors.js";
+import { loadSigningKey, parseTrustedServices } from "./service-token.js";
 
 /** Development values shipped in this repo and in LifeOS Portal; none may guard production. */
 export const KNOWN_INSECURE_SECRETS = new Set([
@@ -20,6 +21,10 @@ export type SafetyConfig = {
   platformAdminToken?: string;
   operatorMfaKey?: string;
   corsOrigins?: readonly string[];
+  serviceAuthMode?: "shared" | "signed";
+  trustedServicesJson?: string;
+  serviceSigningKey?: string;
+  serviceSigningKid?: string;
 };
 
 export type SafetyIssue = { key: string; message: string };
@@ -53,12 +58,41 @@ export function productionSafetyIssues(cfg: SafetyConfig): SafetyIssue[] {
   if (mfaKey && (mfaKey.length < 32 || KNOWN_INSECURE_SECRETS.has(mfaKey) || mfaKey === token || mfaKey === platformToken)) {
     issues.push({ key: "ECO_OPERATOR_MFA_KEY", message: "must be at least 32 characters and not reuse another token" });
   }
+  issues.push(...serviceCredentialIssues(cfg));
   const unsafeOrigins = unsafeProductionOrigins(cfg.corsOrigins ?? []);
   if (unsafeOrigins.length) {
     issues.push({
       key: "CORS_ORIGINS",
       message: `must list https origins Digiconomy controls; refused: ${unsafeOrigins.join(", ")}`,
     });
+  }
+  return issues;
+}
+
+/** Signed service credentials: parseable, no test keys, and signed-only mode has keys to check. */
+function serviceCredentialIssues(cfg: SafetyConfig): SafetyIssue[] {
+  const issues: SafetyIssue[] = [];
+  let trusted: ReturnType<typeof parseTrustedServices> = {};
+  try {
+    trusted = parseTrustedServices(cfg.trustedServicesJson ?? "");
+  } catch {
+    issues.push({ key: "ECO_TRUSTED_SERVICES", message: "is not valid JSON with Ed25519 public keys" });
+  }
+  if (Object.values(trusted).some((t) => Object.keys(t.keys).some((kid) => kid.startsWith("test-")))) {
+    issues.push({ key: "ECO_TRUSTED_SERVICES", message: "must not trust test- keys in production" });
+  }
+  if (cfg.serviceAuthMode === "signed" && !Object.keys(trusted).length) {
+    issues.push({ key: "ECO_TRUSTED_SERVICES", message: "is required when ECO_SERVICE_AUTH_MODE=signed" });
+  }
+  if ((cfg.serviceSigningKey ?? "").trim()) {
+    try {
+      loadSigningKey(cfg.serviceSigningKey ?? "");
+    } catch {
+      issues.push({ key: "ECO_SERVICE_SIGNING_KEY", message: "is not a base64url PKCS#8 Ed25519 private key" });
+    }
+    if (!(cfg.serviceSigningKid ?? "").trim() || (cfg.serviceSigningKid ?? "").startsWith("test-")) {
+      issues.push({ key: "ECO_SERVICE_SIGNING_KID", message: "must be set and must not be a test- key id" });
+    }
   }
   return issues;
 }

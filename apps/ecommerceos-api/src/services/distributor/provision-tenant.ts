@@ -11,6 +11,11 @@ import { initialActivationStatus } from "../activation.js";
 
 export type ProvisionTenantInput = {
   distributorTenantId: string;
+  /** LifeOS Portal install: one store per install. */
+  installId?: string;
+  /** "portal-install:<id>" and the request fingerprint: a repeat replays, a different request is refused. */
+  idempotencyKey?: string;
+  requestHash?: string;
   tenantId?: string;
   subdomain: string;
   slug?: string;
@@ -63,7 +68,14 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
   const seedMode = input.seed ?? "default";
   const modules = input.modules?.length ? input.modules : [...preset.modules];
 
+  if (input.idempotencyKey) {
+    const prior = await prisma.tenant.findUnique({ where: { provisionKey: input.idempotencyKey } });
+    if (prior) return replayIdempotent(prior, input);
+  }
   const existing = await prisma.tenant.findUnique({ where: { slug } });
+  if (existing && input.installId && existing.portalInstallId && existing.portalInstallId !== input.installId) {
+    throw httpError(409, "conflict", `Tenant slug already exists: ${slug}`);
+  }
   if (existing) {
     // A retry by the same owner returns the store it already created; anyone else gets a conflict.
     const replay = input.owner?.subject ? await replayForOwner(existing.id, input.owner.subject) : null;
@@ -88,53 +100,76 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
   });
 
   const orgSlug = input.organization?.slug ?? `${slug}-group`.replace(/[^a-z0-9-]/g, "-");
-  const organization = await prisma.organization.upsert({
-    where: { slug: orgSlug },
-    create: {
-      slug: orgSlug,
-      name: input.organization?.name ?? `${input.displayName} Group`,
-      status: "active",
-      metadata: { distributorTenantId: input.distributorTenantId },
-    },
-    update: {
-      name: input.organization?.name ?? `${input.displayName} Group`,
-    },
+  const upsertOrganization = () =>
+    prisma.organization.upsert({
+      where: { slug: orgSlug },
+      create: {
+        slug: orgSlug,
+        name: input.organization?.name ?? `${input.displayName} Group`,
+        status: "active",
+        metadata: { distributorTenantId: input.distributorTenantId },
+      },
+      update: {
+        name: input.organization?.name ?? `${input.displayName} Group`,
+      },
+    });
+  // An upsert is not atomic: a concurrent request may create the organization first.
+  const organization = await upsertOrganization().catch((err: { code?: string }) => {
+    if (err.code === "P2002") return upsertOrganization();
+    throw err;
   });
 
-  const tenant = await prisma.tenant.create({
-    data: {
-      organizationId: organization.id,
-      slug,
-      name: input.displayName,
-      businessType: preset.id,
-      status: "active",
-      activationStatus: initialActivationStatus(),
-      lifeosBusinessId: input.trustId?.businessPublicId ?? input.distributorTenantId,
-      logoUrl: input.brand?.logoUrl,
-      primaryColor: input.brand?.primaryColor ?? ECOMMERCEOS_MANIFEST.brandDefaults.primaryColor,
-      settings: {
-        distributorTenantId: input.distributorTenantId,
-        customDomain: input.customDomain ?? null,
-        oauthDestinations: input.oauthDestinations ?? ECOMMERCEOS_MANIFEST.install.oauthDestinations,
-        trustIdAudience: input.trustId?.audience ?? config.trustidAudience,
-        manifestVersion: input.manifestVersion ?? ECOMMERCEOS_MANIFEST.version,
-        provisionedAt: new Date().toISOString(),
-        enabledModules: modules,
-        primitiveBindings,
-        distributorDeploymentId: deploy.deploymentId,
-        walletPayoutAccount: input.walletPayoutAccount ?? null,
-        verticalId: preset.id,
-        operatingModel: preset.operatingModel,
-        hasPhysicalAddress: input.hasPhysicalAddress ?? preset.hasPhysicalAddress,
-        destinationOccupants: (preset.seedOccupants ?? []).map((row, index) => ({
-          id: `occ_seed_${index + 1}`,
-          ...row,
-        })),
-        marketplaceSellers: [] as Array<{ id: string; displayName: string; status: string }>,
-        wholesale: preset.wholesale ?? null,
+  let tenant;
+  try {
+    tenant = await prisma.tenant.create({
+      data: {
+        portalInstallId: input.installId ?? null,
+        provisionKey: input.idempotencyKey ?? null,
+        provisionRequestHash: input.requestHash ?? null,
+        organizationId: organization.id,
+        slug,
+        name: input.displayName,
+        businessType: preset.id,
+        status: "active",
+        activationStatus: initialActivationStatus(),
+        lifeosBusinessId: input.trustId?.businessPublicId ?? input.distributorTenantId,
+        logoUrl: input.brand?.logoUrl,
+        primaryColor: input.brand?.primaryColor ?? ECOMMERCEOS_MANIFEST.brandDefaults.primaryColor,
+        settings: {
+          distributorTenantId: input.distributorTenantId,
+          customDomain: input.customDomain ?? null,
+          oauthDestinations: input.oauthDestinations ?? ECOMMERCEOS_MANIFEST.install.oauthDestinations,
+          trustIdAudience: input.trustId?.audience ?? config.trustidAudience,
+          manifestVersion: input.manifestVersion ?? ECOMMERCEOS_MANIFEST.version,
+          provisionedAt: new Date().toISOString(),
+          enabledModules: modules,
+          primitiveBindings,
+          distributorDeploymentId: deploy.deploymentId,
+          walletPayoutAccount: input.walletPayoutAccount ?? null,
+          verticalId: preset.id,
+          operatingModel: preset.operatingModel,
+          hasPhysicalAddress: input.hasPhysicalAddress ?? preset.hasPhysicalAddress,
+          destinationOccupants: (preset.seedOccupants ?? []).map((row, index) => ({
+            id: `occ_seed_${index + 1}`,
+            ...row,
+          })),
+          marketplaceSellers: [] as Array<{ id: string; displayName: string; status: string }>,
+          wholesale: preset.wholesale ?? null,
+        },
       },
-    },
-  });
+    });
+  } catch (err) {
+    if ((err as { code?: string }).code !== "P2002") throw err;
+    // A concurrent request created the store (or holds the install or the handle) first.
+    if (input.idempotencyKey) {
+      const prior = await prisma.tenant.findUnique({ where: { provisionKey: input.idempotencyKey } });
+      if (prior) return replayIdempotent(prior, input);
+    }
+    const raced = await prisma.tenant.findUnique({ where: { slug } });
+    const replay = raced && input.owner?.subject ? await replayForOwner(raced.id, input.owner.subject) : null;
+    if (replay) return replay;
+    throw httpError(409, "conflict", `Tenant slug already exists: ${slug}`);
+  }
 
   const adminEmail = (input.adminStaff?.email ?? `owner@${slug}.commerce.local`).trim().toLowerCase();
   const credentials = ownerCredentials(input, adminEmail);
@@ -199,6 +234,8 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
   return {
     ok: true as const,
     tenantId: tenant.id,
+    installId: tenant.portalInstallId ?? input.distributorTenantId,
+    businessId: tenant.lifeosBusinessId,
     storefrontUrl,
     adminConsoleUrl,
     organizationId: organization.id,
@@ -248,8 +285,21 @@ function ownerCredentials(
   };
 }
 
-async function replayForOwner(tenantId: string, ownerSubject: string) {
-  const owner = await prisma.staffMember.findFirst({ where: { tenantId, role: "owner", trustId: ownerSubject } });
+/** The same install request again: replay the store; a different request with the same key is refused. */
+async function replayIdempotent(prior: { id: string; provisionRequestHash: string | null }, input: ProvisionTenantInput) {
+  if (prior.provisionRequestHash !== (input.requestHash ?? null)) {
+    throw httpError(409, "idempotency_conflict", "This Idempotency-Key was used for a different request.");
+  }
+  const replay = input.owner?.subject ? await replayForOwner(prior.id, input.owner.subject) : await replayForOwner(prior.id);
+  // Still being created by the first request: retry shortly (not a terminal conflict).
+  if (!replay) throw httpError(503, "provision_in_progress", "This store is still being set up. Retry shortly.");
+  return replay;
+}
+
+async function replayForOwner(tenantId: string, ownerSubject?: string) {
+  const owner = await prisma.staffMember.findFirst({
+    where: { tenantId, role: "owner", ...(ownerSubject ? { trustId: ownerSubject } : {}) },
+  });
   if (!owner) return null;
   const tenant = await prisma.tenant.findUnique({
     where: { id: tenantId },
@@ -266,6 +316,8 @@ async function replayForOwner(tenantId: string, ownerSubject: string) {
     ok: true as const,
     replayed: true as const,
     tenantId: tenant.id,
+    installId: tenant.portalInstallId ?? (settings.distributorTenantId as string | undefined) ?? null,
+    businessId: tenant.lifeosBusinessId,
     storefrontUrl,
     adminConsoleUrl,
     organizationId: tenant.organizationId,
