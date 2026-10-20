@@ -18,3 +18,7 @@
 0860dbeda61d01fddb5273cca8b176f80f25d631:tests/e2e/commercial-activation.test.ts:generic-api-key:33
 0860dbeda61d01fddb5273cca8b176f80f25d631:tests/e2e/platform-console.test.ts:generic-api-key:23
 0860dbeda61d01fddb5273cca8b176f80f25d631:tests/e2e/platform-console.test.ts:generic-api-key:24
+
+# Joint integration test fixtures (2026-10-20): the reused store-owner fixture password in the
+# signed service-credential suite. Its keys are generated per run and never written down.
+dd2276eb4bb335a743b04189a0bfd5ced531afa6:tests/e2e/service-auth.test.ts:generic-api-key:29
