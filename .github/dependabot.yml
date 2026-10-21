@@ -1,0 +1,23 @@
+# Dependabot version updates. Every update arrives as a pull request for review: nothing here merges
+# or deploys anything (repository auto-merge is off; production deploys wait for CI on main).
+# Security updates are enabled separately in the repository settings and also open pull requests.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    labels: ["dependencies"]
