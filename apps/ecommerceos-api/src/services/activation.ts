@@ -4,6 +4,7 @@ import { config } from "../config.js";
 import { httpError } from "../lib/crypto.js";
 import { writeAudit } from "../lib/audit.js";
 import type { OperatorAuth } from "./platform-auth.js";
+import { changeActivationStatus, sendActivationEventsInBackground } from "./activation-events.js";
 
 /**
  * Commercial model: each business pays a one-time brand setup fee for its own independent
@@ -313,36 +314,38 @@ export async function verifyActivation(operator: OperatorAuth, id: string, opts:
 
   const partner = row.partnerId ? await prisma.marketingPartner.findUnique({ where: { id: row.partnerId } }) : null;
   const credit = partner?.status === "active" ? commissionFor(row.amountMinor) : 0;
+  const billedToName = (await prisma.tenant.findUniqueOrThrow({ where: { id: row.tenantId } })).name;
+  let eventId: string | null;
   try {
-    await prisma.$transaction([
-      prisma.tenant.update({ where: { id: row.tenantId }, data: { activationStatus: "active" } }),
-      ...(partner && credit > 0
-        ? [
-            prisma.partnerCommission.create({
-              data: {
-                activationId: row.id,
-                partnerId: partner.id,
-                rateBps: PARTNER_COMMISSION_BPS,
-                amountMinor: credit,
-                currency: row.currency,
-              },
-            }),
-          ]
-        : []),
-      prisma.billingDocument.create({
+    // The status change and its Portal event commit together, or not at all.
+    eventId = await prisma.$transaction(async (tx) => {
+      const event = await changeActivationStatus(tx, row.tenantId, "active", "verified");
+      if (partner && credit > 0) {
+        await tx.partnerCommission.create({
+          data: {
+            activationId: row.id,
+            partnerId: partner.id,
+            rateBps: PARTNER_COMMISSION_BPS,
+            amountMinor: credit,
+            currency: row.currency,
+          },
+        });
+      }
+      await tx.billingDocument.create({
         data: {
           activationId: row.id,
           tenantId: row.tenantId,
           kind: "receipt",
           number: documentNumber("receipt"),
-          billedToName: (await prisma.tenant.findUniqueOrThrow({ where: { id: row.tenantId } })).name,
+          billedToName,
           amountMinor: row.amountMinor,
           currency: row.currency,
           transactionReference: row.paymentReference,
         },
-      }),
-      prisma.activation.update({ where: { id }, data: { appliedAt: new Date() } }),
-    ]);
+      });
+      await tx.activation.update({ where: { id }, data: { appliedAt: new Date() } });
+      return event;
+    });
   } catch (err) {
     // Undo the claim so the submission can be verified again; nothing else was written.
     await prisma.activation.updateMany({
@@ -366,6 +369,7 @@ export async function verifyActivation(operator: OperatorAuth, id: string, opts:
       ...(partner && !credit ? { commissionSkipped: `partner_${partner.status}` } : {}),
     },
   });
+  sendActivationEventsInBackground([eventId]);
   return presentActivation(
     await prisma.activation.findUniqueOrThrow({ where: { id }, include: { partner: true, commission: true, tenant: true, documents: true } }),
   );
@@ -435,20 +439,18 @@ export async function reverseActivation(
     }
     throw httpError(409, "not_verified", `This activation is ${current?.status ?? row.status}.`);
   }
-  const [, commission] = await prisma.$transaction([
-    prisma.tenant.updateMany({
-      where: { id: row.tenantId, activationStatus: "active" },
-      data: { activationStatus: row.tenantStatusBefore },
-    }),
-    prisma.partnerCommission.updateMany({
+  const { eventId, commission } = await prisma.$transaction(async (tx) => {
+    const event = await changeActivationStatus(tx, row.tenantId, row.tenantStatusBefore, "reversed", "active");
+    const reversedCommissions = await tx.partnerCommission.updateMany({
       where: { activationId: id, status: "accrued" },
       data: { status: "reversed", reversedAt: new Date() },
-    }),
-    prisma.billingDocument.updateMany({
+    });
+    await tx.billingDocument.updateMany({
       where: { activationId: id, status: "draft" },
       data: { status: "void", voidedAt: new Date(), voidReason: "activation reversed" },
-    }),
-  ]);
+    });
+    return { eventId: event, commission: reversedCommissions };
+  });
   await writeAudit({
     tenantId: row.tenantId,
     actorKind: "platform_operator",
@@ -463,6 +465,7 @@ export async function reverseActivation(
       ...(approval ? { approvalId: approval.approvalId, requestedById: approval.requestedById } : {}),
     },
   });
+  sendActivationEventsInBackground([eventId]);
   return presentActivation(
     await prisma.activation.findUniqueOrThrow({ where: { id }, include: { partner: true, commission: true, tenant: true, documents: true } }),
   );

@@ -1,10 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { config } from "../../config.js";
 import { provisionEcommerceTenant } from "../../services/distributor/provision-tenant.js";
 import { storeOpenForBuyers } from "../../services/activation.js";
 import { prisma } from "../../db.js";
+import { authorizeService } from "../../lib/service-auth.js";
+import { writeAudit } from "../../lib/audit.js";
+import { activationVersionOf } from "../../services/activation-events.js";
+import { businessIdOf, installIdOf } from "../../services/store-identity.js";
 
 function bearerEquals(provided: string, expected: string): boolean {
   const a = Buffer.from(provided);
@@ -25,10 +29,13 @@ export function requireInternalToken(authHeader: string | undefined): boolean {
  */
 export async function registerInternalProvisionRoutes(app: FastifyInstance) {
   app.post("/internal/distributor/provision", async (req, reply) => {
-    if (!requireInternalToken(req.headers.authorization)) {
-      return reply.code(401).send({
-        error: "unauthorized",
-        message: "Valid service bearer token required",
+    const caller = await authorizeService(req, reply, "stores:provision");
+    if (!caller) return;
+    if (config.provisioningPaused) {
+      return reply.code(503).send({
+        error: "provisioning_paused",
+        message: "New stores cannot be created during maintenance. Nothing was created; retry the same request later.",
+        requestId: req.id,
       });
     }
 
@@ -36,6 +43,8 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
       .object({
         distributorTenantId: z.string().min(1).optional(),
         tenantId: z.string().min(1).optional(),
+        /** LifeOS Portal install id; when absent, tenantId is taken as the install id. */
+        installId: z.string().min(1).max(128).optional(),
         subdomain: z.string().min(1).regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/i),
         slug: z.string().min(1).optional(),
         displayName: z.string().min(1),
@@ -55,6 +64,8 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
             businessPublicId: z.string().optional(),
           })
           .optional(),
+        /** The LifeOS business (minted by Portal, immutable). trustId.businessPublicId is its older alias. */
+        businessId: z.string().min(1).max(128).optional(),
         adminStaff: z
           .object({
             email: z.string().email(),
@@ -94,8 +105,34 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
       })
       .parse(req.body);
 
+    // Another service may not set an owner's password or where money is paid: the owner sets their
+    // password through the handoff, and payout details come only from the owner. Legacy shared-token
+    // callers keep the old behaviour until that token is retired.
+    if (caller.kind === "signed") {
+      const fields = [body.adminStaff?.password !== undefined && "adminStaff.password", body.walletPayoutAccount !== undefined && "walletPayoutAccount"].filter(Boolean);
+      if (fields.length) {
+        return reply.code(400).send({ error: "field_not_allowed", message: "A service call may not set an owner password or a payout account.", fields, requestId: req.id });
+      }
+    }
+
+    if (body.businessId && body.trustId?.businessPublicId && body.businessId !== body.trustId.businessPublicId) {
+      return reply.code(400).send({ error: "business_id_mismatch", message: "businessId and trustId.businessPublicId must name the same business.", requestId: req.id });
+    }
+
+    // Idempotency-Key names the install: "portal-install:<installId, else tenantId>".
+    const header = req.headers["idempotency-key"];
+    const idempotencyKey = typeof header === "string" ? header : undefined;
+    const installRef = body.installId ?? body.tenantId ?? body.distributorTenantId;
+    if (idempotencyKey !== undefined && idempotencyKey !== `portal-install:${installRef}`) {
+      return reply.code(400).send({ error: "idempotency_key_mismatch", message: "Idempotency-Key must be portal-install:<install id>" });
+    }
+    const requestHash = createHash("sha256").update(canonicalJson(body)).digest("hex");
+
     try {
       const result = await provisionEcommerceTenant({
+        installId: body.installId ?? (idempotencyKey ? installRef : undefined),
+        idempotencyKey,
+        requestHash,
         distributorTenantId: body.distributorTenantId ?? body.tenantId!,
         tenantId: body.tenantId,
         subdomain: body.subdomain,
@@ -107,6 +144,7 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
         modules: body.modules,
         seed: body.seed,
         trustId: body.trustId,
+        businessId: body.businessId ?? body.trustId?.businessPublicId,
         adminStaff: body.adminStaff,
         owner: body.owner,
         organization: body.organization,
@@ -121,7 +159,8 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
       return reply.code("replayed" in result ? 200 : 201).send(result);
     } catch (err) {
       const e = err as { statusCode?: number; code?: string; message?: string };
-      if (!e.statusCode || e.statusCode >= 500) {
+      // A deliberate 503 (the same install is still being set up) passes through as retryable.
+      if (!e.statusCode || (e.statusCode >= 500 && e.statusCode !== 503)) {
         // Internal details stay in the log; nothing of a failed attempt is kept, so a retry is safe.
         req.log.error({ err }, "provisioning failed");
         return reply.code(500).send({
@@ -136,27 +175,82 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
 
   /** Provisioning and activation status of one store, for LifeOS Portal to poll. */
   app.get("/internal/ecommerceos/stores/:subdomain", async (req, reply) => {
-    if (!requireInternalToken(req.headers.authorization)) {
-      return reply.code(401).send({ error: "unauthorized", message: "Valid service bearer token required" });
-    }
+    if (!(await authorizeService(req, reply, "stores:read"))) return;
     const { subdomain } = z.object({ subdomain: z.string().min(1).max(100) }).parse(req.params);
     const tenant = await prisma.tenant.findUnique({
       where: { slug: subdomain.trim().toLowerCase() },
-      include: { storeConfig: true, staff: { where: { role: "owner", status: "active" } } },
+      include: { storeConfig: true, staff: { where: { role: "owner", status: "active" } }, portalInstall: true },
     });
-    if (!tenant) return reply.code(404).send({ error: "not_found", message: "Store not found" });
+    // provisioningPaused true: this process creates no stores, so a 404 cannot be overtaken by a request in flight.
+    if (!tenant) return reply.code(404).send({ error: "not_found", message: "Store not found", provisioningPaused: config.provisioningPaused });
     return {
       tenantId: tenant.id,
       subdomain: tenant.slug,
       status: tenant.status,
       provisioned: Boolean(tenant.storeConfig),
       ownerBound: tenant.staff.some((s) => Boolean(s.trustId)),
+      // Bindings Portal checks against its own record.
+      installId: installIdOf(tenant),
+      businessId: businessIdOf(tenant),
+      ownerSubject: tenant.staff.find((s) => s.trustId)?.trustId ?? null,
       activation: {
         required: config.activationRequired,
         status: tenant.activationStatus,
         storeOpen: await storeOpenForBuyers(tenant.id),
+        // Portal compares this with the last event it applied; a lower version means one is missing.
+        ...(await activationVersionOf(tenant.id, tenant.activationVersion)),
       },
       createdAt: tenant.createdAt.toISOString(),
+      provisioningPaused: config.provisioningPaused,
     };
   });
+
+  /**
+   * Binds the stable LifeOS business id to a store that has none yet (created before it existed), once.
+   * The same id again is a no-op; a store already bound to a different business is never changed.
+   */
+  app.post("/internal/ecommerceos/stores/:subdomain/business", async (req, reply) => {
+    const caller = await authorizeService(req, reply, "stores:bind-business");
+    if (!caller) return;
+    const { subdomain } = z.object({ subdomain: z.string().min(1).max(100) }).parse(req.params);
+    const body = z
+      .object({ businessId: z.string().min(1).max(128), installId: z.string().min(1).max(128), ownerSubject: z.string().min(3).max(200) })
+      .parse(req.body);
+    const tenant = await prisma.tenant.findUnique({
+      where: { slug: subdomain.trim().toLowerCase() },
+      include: { portalInstall: true, staff: { where: { role: "owner", status: "active" } } },
+    });
+    if (!tenant) return reply.code(404).send({ error: "not_found", message: "Store not found" });
+    if (installIdOf(tenant) !== body.installId) return reply.code(403).send({ error: "install_mismatch", message: "This store belongs to another install." });
+    if (!tenant.staff.some((s) => s.trustId === body.ownerSubject)) return reply.code(403).send({ error: "owner_mismatch", message: "This store belongs to another owner." });
+    const current = businessIdOf(tenant);
+    if (current === body.businessId) return { ok: true, replayed: true, tenantId: tenant.id, businessId: current };
+    if (current !== null) return reply.code(409).send({ error: "business_id_conflict", message: "This store is already bound to a different business." });
+    // Conditional on the value just read, so two concurrent binds cannot both win.
+    const bound = await prisma.tenant.updateMany({ where: { id: tenant.id, lifeosBusinessId: tenant.lifeosBusinessId }, data: { lifeosBusinessId: body.businessId } });
+    if (bound.count !== 1) return reply.code(409).send({ error: "business_id_conflict", message: "The store's business changed meanwhile; read its status and retry." });
+    await writeAudit({
+      tenantId: tenant.id,
+      actorKind: "service",
+      actorId: caller.kind === "signed" ? caller.issuer : null,
+      action: "portal.business_bound",
+      resource: "tenant",
+      resourceId: tenant.id,
+      metadata: { businessId: body.businessId, installId: body.installId, replacedInstallCopy: tenant.lifeosBusinessId !== null },
+    });
+    return { ok: true, bound: true, tenantId: tenant.id, businessId: body.businessId };
+  });
+}
+
+
+/** JSON with sorted keys, so the same request always has the same fingerprint. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value as object)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }

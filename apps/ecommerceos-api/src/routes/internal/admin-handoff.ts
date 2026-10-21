@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { config } from "../../config.js";
-import { requireInternalToken } from "./provision.js";
+import { authorizeService } from "../../lib/service-auth.js";
 import { createAdminHandoff } from "../../services/staff-auth.js";
 
 /**
@@ -11,15 +11,15 @@ import { createAdminHandoff } from "../../services/staff-auth.js";
  */
 export async function registerAdminHandoffRoutes(app: FastifyInstance) {
   app.post("/internal/ecommerceos/admin-handoff", async (req, reply) => {
-    if (!requireInternalToken(req.headers.authorization)) {
-      return reply.code(401).send({ error: "unauthorized", message: "Valid service bearer token required" });
-    }
+    if (!(await authorizeService(req, reply, "stores:admin-handoff"))) return;
     const body = z
       .object({
         subdomain: z.string().min(1).regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/i),
         tenantId: z.string().min(1).optional(),
         ownerSubject: z.string().min(3).max(200),
         ownerEmail: z.string().email().optional(),
+        /** LifeOS Portal install id; must be the install this store was created for. */
+        installId: z.string().min(1).max(128).optional(),
       })
       .parse(req.body);
     const handoff = await createAdminHandoff(body);

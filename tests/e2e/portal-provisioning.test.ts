@@ -288,7 +288,9 @@ test("Portal can poll a store's provisioning and activation status with the serv
   assert.equal(body.subdomain, subdomain);
   assert.equal(body.provisioned, true);
   assert.equal(body.ownerBound, true);
-  assert.deepEqual(body.activation, { required: false, status: "legacy", storeOpen: true });
+  const { updatedAt, ...activation } = body.activation;
+  assert.deepEqual(activation, { required: false, status: "legacy", storeOpen: true, version: 1 });
+  assert.equal(typeof updatedAt, "string", "when the activation last changed, for Portal to compare");
   const missing = await app.inject({
     method: "GET",
     url: "/internal/ecommerceos/stores/no-such-store",

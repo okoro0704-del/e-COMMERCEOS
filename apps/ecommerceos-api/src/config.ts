@@ -65,6 +65,8 @@ export const config = {
    * platform staff verify their setup payment; stores created earlier are grandfathered.
    */
   activationRequired: process.env.ECO_ACTIVATION_REQUIRED === "true",
+  /** Release window: Portal provisioning creates nothing (retryable 503); status reads and handoff still work. */
+  provisioningPaused: process.env.ECO_PROVISIONING_PAUSED === "true",
   /** Shown to owners with the setup fee: how to pay outside the platform. Empty until approved. */
   setupPaymentInstructions: process.env.ECO_SETUP_PAYMENT_INSTRUCTIONS ?? "",
   /** Early-adopter setup price. Off until Digiconomy confirms eligibility, amount and currency. */
@@ -86,5 +88,18 @@ export const config = {
   operatorMfaKey: process.env.ECO_OPERATOR_MFA_KEY ?? "",
   /** How long a bank-transfer order is held for the customer to pay before it is released. */
   bankTransferWindowHours: Number(process.env.ECO_BANK_TRANSFER_WINDOW_HOURS ?? 48),
+  /**
+   * Service-to-service credentials (digiconomy-service+jwt v1). "shared": the legacy shared
+   * bearer token, plus signed tokens from trusted services; "signed": signed tokens only on the
+   * Portal-facing routes (the shared token stays only for internal jobs and logistics).
+   */
+  serviceAuthMode: (process.env.ECO_SERVICE_AUTH_MODE ?? "shared").toLowerCase() === "signed" ? ("signed" as const) : ("shared" as const),
+  /** {"<issuer>": {"permissions": [...], "keys": {"<kid>": "<public key>"}}}; permissions come only from here. */
+  trustedServicesJson: process.env.ECO_TRUSTED_SERVICES ?? "",
+  /** This service's Ed25519 signing key (base64url PKCS#8 DER) and key id, for calls to Portal. */
+  serviceSigningKey: process.env.ECO_SERVICE_SIGNING_KEY ?? "",
+  serviceSigningKid: process.env.ECO_SERVICE_SIGNING_KID ?? "",
+  serviceId: "ecommerceos",
+  portalServiceId: "lifeos-portal",
   version: "0.1.0",
 };
