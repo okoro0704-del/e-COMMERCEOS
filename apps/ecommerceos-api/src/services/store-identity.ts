@@ -30,7 +30,14 @@ export function installIdOf(tenant: StoreIdentityRow): string | null {
  * "biz_<the store's own subdomain>", which Portal derived from the subdomain until the stable id.
  */
 export function businessIdOf(tenant: StoreIdentityRow): string | null {
+  return storedBusinessIdKind(tenant) === "business-id" ? tenant.lifeosBusinessId : null;
+}
+
+/** What the stored value is: nothing, one of the two older non-business values, or a business id. */
+export function storedBusinessIdKind(tenant: StoreIdentityRow): "none" | "install-copy" | "subdomain-derived" | "business-id" {
   const value = tenant.lifeosBusinessId;
-  if (!value || value === distributorTenantIdOf(tenant.settings) || value === `biz_${tenant.slug}`) return null;
-  return value;
+  if (!value) return "none";
+  if (value === distributorTenantIdOf(tenant.settings)) return "install-copy";
+  if (value === `biz_${tenant.slug}`) return "subdomain-derived";
+  return "business-id";
 }

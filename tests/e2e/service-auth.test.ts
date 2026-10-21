@@ -600,5 +600,8 @@ test("the business id is Portal's, stored verbatim, never derived; an older stor
   assert.equal((await signedCall("GET", `/internal/ecommerceos/stores/${s4}`, undefined).res).json().businessId, null);
   assert.equal((await signedCall("POST", bindUrl(s4), { businessId: "bus_stable_4", installId: `tid_${s4}`, ownerSubject: "trustid:owner-b4" }).res).statusCode, 200);
   const audit = await app.inject({ method: "GET", url: "/v1/platform/audit?limit=500", headers: { authorization: `Bearer ${operatorToken}` } });
-  assert.equal((audit.json().entries as Array<{ action: string }>).filter((e) => e.action === "portal.business_bound").length, 2);
+  const entries = audit.json().entries as Array<{ action: string; metadata: { reason?: string; previous?: string } }>;
+  assert.deepEqual(entries.filter((e) => e.action === "portal.business_bound").map((e) => e.metadata.previous).sort(), ["install-copy", "subdomain-derived"]);
+  const refused = entries.filter((e) => e.action === "portal.business_bind_refused").map((e) => e.metadata.reason).sort();
+  assert.deepEqual(refused, ["business_id_conflict", "business_id_conflict", "install_mismatch", "owner_mismatch"], "every refused bind is audited with its reason");
 });
