@@ -600,5 +600,43 @@ test("the business id is Portal's, stored verbatim, never derived; an older stor
   assert.equal((await signedCall("GET", `/internal/ecommerceos/stores/${s4}`, undefined).res).json().businessId, null);
   assert.equal((await signedCall("POST", bindUrl(s4), { businessId: "bus_stable_4", installId: `tid_${s4}`, ownerSubject: "trustid:owner-b4" }).res).statusCode, 200);
   const audit = await app.inject({ method: "GET", url: "/v1/platform/audit?limit=500", headers: { authorization: `Bearer ${operatorToken}` } });
-  assert.equal((audit.json().entries as Array<{ action: string }>).filter((e) => e.action === "portal.business_bound").length, 2);
+  const entries = audit.json().entries as Array<{ action: string; metadata: { reason?: string; previous?: string } }>;
+  assert.deepEqual(entries.filter((e) => e.action === "portal.business_bound").map((e) => e.metadata.previous).sort(), ["install-copy", "subdomain-derived"]);
+  const refused = entries.filter((e) => e.action === "portal.business_bind_refused").map((e) => e.metadata.reason).sort();
+  assert.deepEqual(refused, ["business_id_conflict", "business_id_conflict", "install_mismatch", "owner_mismatch"], "every refused bind is audited with its reason");
+  for (const e of entries.filter((x) => x.action === "portal.business_bind_refused" || x.action === "portal.business_bound")) {
+    assert.deepEqual(Object.keys(e.metadata).sort().filter((k) => /token|secret|password|authorization|subject/i.test(k)), [], "audit rows carry no credentials or owner subjects");
+  }
+});
+
+test("a business bind commits only with its audit row: if the audit cannot be written, the store stays unbound", async () => {
+  const installId = handle("ins");
+  const subdomain = handle("bizaudit");
+  const ownerSubject = "trustid:owner-bizaudit";
+  const created = await signedCall("POST", "/internal/distributor/provision", { ...provisionBody(installId, subdomain, ownerSubject), trustId: { businessPublicId: `biz_${subdomain}` } }, { idk: `portal-install:${installId}` }).res;
+  assert.equal(created.statusCode, 201, created.body);
+  const url = `/internal/ecommerceos/stores/${subdomain}/business`;
+  const bind = { businessId: "bus_audit_policy", installId, ownerSubject };
+  const postgres = String(process.env.DATABASE_URL).startsWith("postgres");
+  // Make audit inserts for binds fail, as if the audit store were unavailable.
+  if (postgres) {
+    await prisma.$executeRawUnsafe(`CREATE OR REPLACE FUNCTION e2e_fail_bind_audit() RETURNS trigger AS $fn$ BEGIN RAISE EXCEPTION 'audit unavailable'; END; $fn$ LANGUAGE plpgsql`);
+    await prisma.$executeRawUnsafe(`CREATE TRIGGER e2e_fail_bind_audit BEFORE INSERT ON "AuditLog" FOR EACH ROW WHEN (NEW.action = 'portal.business_bound') EXECUTE FUNCTION e2e_fail_bind_audit()`);
+  } else {
+    await prisma.$executeRawUnsafe(`CREATE TRIGGER e2e_fail_bind_audit BEFORE INSERT ON "AuditLog" WHEN NEW.action = 'portal.business_bound' BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END`);
+  }
+  try {
+    const failed = await signedCall("POST", url, bind).res;
+    assert.equal(failed.statusCode, 500, failed.body);
+    assert.equal((await signedCall("GET", `/internal/ecommerceos/stores/${subdomain}`, undefined).res).json().businessId, null, "no bind without its audit row");
+  } finally {
+    await prisma.$executeRawUnsafe(postgres ? `DROP TRIGGER IF EXISTS e2e_fail_bind_audit ON "AuditLog"` : `DROP TRIGGER IF EXISTS e2e_fail_bind_audit`);
+  }
+  const retried = await signedCall("POST", url, bind).res;
+  assert.equal(retried.statusCode, 200, retried.body);
+  assert.equal(retried.json().bound, true, "the retry performs the bind, not a misleading replay");
+  const again = await signedCall("POST", url, bind).res;
+  assert.equal(again.json().replayed, true);
+  const rows = await prisma.auditLog.count({ where: { action: "portal.business_bound", resourceId: created.json().tenantId } });
+  assert.equal(rows, 1, "exactly one bind audit row: replays add none");
 });
