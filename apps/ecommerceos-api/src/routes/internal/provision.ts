@@ -223,6 +223,8 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
     if (!tenant) return reply.code(404).send({ error: "not_found", message: "Store not found" });
     const actorId = caller.kind === "signed" ? caller.issuer : null;
     // Every refusal is terminal and audited: a store's business or owner never changes silently.
+    // Audit policy: a refusal stands even if its audit row cannot be written (nothing changed), and
+    // that failure is logged; a successful bind commits only together with its audit row.
     const refuse = async (status: number, error: string, message: string) => {
       await writeAudit({
         tenantId: tenant.id,
@@ -232,7 +234,7 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
         resource: "tenant",
         resourceId: tenant.id,
         metadata: { reason: error, requestedBusinessId: body.businessId, requestedInstallId: body.installId },
-      });
+      }).catch((err) => req.log.error({ err, reason: error }, "business bind refusal could not be audited"));
       return reply.code(status).send({ error, message });
     };
     if (installIdOf(tenant) !== body.installId) return refuse(403, "install_mismatch", "This store belongs to another install.");
@@ -241,18 +243,18 @@ export async function registerInternalProvisionRoutes(app: FastifyInstance) {
     if (current === body.businessId) return { ok: true, replayed: true, tenantId: tenant.id, businessId: current };
     if (current !== null) return refuse(409, "business_id_conflict", "This store is already bound to a different business.");
     const previous = storedBusinessIdKind(tenant);
-    // Conditional on the value just read, so two concurrent binds cannot both win.
-    const bound = await prisma.tenant.updateMany({ where: { id: tenant.id, lifeosBusinessId: tenant.lifeosBusinessId }, data: { lifeosBusinessId: body.businessId } });
-    if (bound.count !== 1) return refuse(409, "business_id_conflict", "The store's business changed meanwhile; read its status and retry.");
-    await writeAudit({
-      tenantId: tenant.id,
-      actorKind: "service",
-      actorId,
-      action: "portal.business_bound",
-      resource: "tenant",
-      resourceId: tenant.id,
-      metadata: { businessId: body.businessId, installId: body.installId, previous },
+    // Conditional on the value just read, so two concurrent binds cannot both win; the bind and its
+    // audit row commit together, so no bind is ever unaudited (an audit failure leaves it unbound).
+    const bound = await prisma.$transaction(async (tx) => {
+      const updated = await tx.tenant.updateMany({ where: { id: tenant.id, lifeosBusinessId: tenant.lifeosBusinessId }, data: { lifeosBusinessId: body.businessId } });
+      if (updated.count !== 1) return false;
+      await writeAudit(
+        { tenantId: tenant.id, actorKind: "service", actorId, action: "portal.business_bound", resource: "tenant", resourceId: tenant.id, metadata: { businessId: body.businessId, installId: body.installId, previous } },
+        tx,
+      );
+      return true;
     });
+    if (!bound) return refuse(409, "business_id_conflict", "The store's business changed meanwhile; read its status and retry.");
     return { ok: true, bound: true, tenantId: tenant.id, businessId: body.businessId };
   });
 }
