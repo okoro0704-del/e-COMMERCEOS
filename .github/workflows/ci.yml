@@ -2,7 +2,8 @@ name: CI
 
 # Verification only: nothing here deploys, and no job holds production credentials. This is the
 # security release candidate's CI, based on production main: SQLite e2e (production's tests have no
-# PostgreSQL harness) and the full-history secret scan.
+# PostgreSQL harness), a runtime smoke of the production start command on PostgreSQL, and the
+# full-history secret scan. Node comes from package.json `engines.node`, pinned to production's runtime.
 on:
   pull_request:
   push:
@@ -41,8 +42,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 22
+          node-version-file: package.json
           cache: npm
+      - name: Node is the pinned runtime
+        run: test "$(node --version)" = "v$(node -p 'require("./package.json").engines.node')"
       - name: Install
         run: npm ci
       # The build generates the Prisma client; typecheck and tests need it.
@@ -52,6 +55,75 @@ jobs:
         run: npm run typecheck
       - name: e2e (SQLite)
         run: npm run test:e2e
+
+  runtime-smoke:
+    name: Runtime smoke (production start command, PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      # Production's database major. Throwaway, local to this job, no password.
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: smoke
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      ECO_ENV: production
+      DATABASE_URL: postgresql://postgres@127.0.0.1:5432/smoke
+      PORT: "8900"
+      CORS_ORIGINS: https://storefront.ci.invalid
+      SMOKE_API: http://127.0.0.1:8900
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: package.json
+          cache: npm
+      - name: Node is the pinned runtime
+        run: test "$(node --version)" = "v$(node -p 'require("./package.json").engines.node')"
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      # Values that exist only for this job; none is a real credential.
+      - name: Per-run secrets
+        run: |
+          for name in SESSION_SECRET INTERNAL_PROVISION_TOKEN; do
+            value="$(openssl rand -hex 32)"
+            echo "::add-mask::$value"
+            echo "$name=$value" >> "$GITHUB_ENV"
+          done
+      # pg_dump 18 writes a random \restrict key per dump, so those lines are left out of the comparison.
+      - name: First boot on an empty database (creates the schema), seed, check
+        run: |
+          npm run start:api > boot-1.log 2>&1 &
+          node tests/smoke/runtime-smoke.mjs wait
+          grep -q "now in sync" boot-1.log
+          node tests/smoke/runtime-smoke.mjs seed
+          node tests/smoke/runtime-smoke.mjs check first-boot
+          docker exec ${{ job.services.postgres.id }} pg_dump -U postgres --schema-only smoke | grep -v '^\\\(un\)\?restrict ' | sha256sum > schema-1.sha
+          pkill -f "node dist/index.js"
+          for i in $(seq 30); do pgrep -f "node dist/index.js" > /dev/null || break; sleep 1; done
+      - name: Restart on the populated database (no schema change), check
+        run: |
+          npm run start:api > boot-2.log 2>&1 &
+          node tests/smoke/runtime-smoke.mjs wait
+          grep -q "already in sync" boot-2.log
+          docker exec ${{ job.services.postgres.id }} pg_dump -U postgres --schema-only smoke | grep -v '^\\\(un\)\?restrict ' | sha256sum | diff - schema-1.sha
+          node tests/smoke/runtime-smoke.mjs check restart
+          pkill -f "node dist/index.js"
+      - name: Server output
+        if: always()
+        run: cat boot-1.log boot-2.log 2>/dev/null || true
 
 
   secret-scan:
