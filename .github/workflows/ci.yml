@@ -1,0 +1,75 @@
+name: CI
+
+# Verification only: nothing here deploys, and no job holds production credentials. This is the
+# security release candidate's CI, based on production main: SQLite e2e (production's tests have no
+# PostgreSQL harness) and the full-history secret scan.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Every outbound base URL points at a reserved name that never resolves (RFC 6761), so no test
+  # can reach a production service, even through a default (DIGIPEDIA_URL defaults to production).
+  DIGIPEDIA_URL: https://digipedia.ci.invalid
+  PORTAL_API_URL: https://portal.ci.invalid
+  TRUSTID_API_URL: https://trustid.ci.invalid
+  ELFCOM_URL: https://elfcom.ci.invalid
+  SOVEREIGN_DRIVE_URL: https://drive.ci.invalid
+  PLATFORM_JOBS_URL: https://jobs.ci.invalid
+  MASTER_DISTRIBUTOR_URL: https://distributor.ci.invalid
+  FUNDZMAN_URL: https://fundzman.ci.invalid
+  LOGISTICS_OS_URL: https://logistics.ci.invalid
+  PRIMITIVES_MODE: local
+  LOGISTICS_MODE: local
+
+jobs:
+  sqlite:
+    name: Build, typecheck, e2e (SQLite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci
+      # The build generates the Prisma client; typecheck and tests need it.
+      - name: Build
+        run: npm run build
+      - name: Typecheck
+        run: npm run typecheck
+      - name: e2e (SQLite)
+        run: npm run test:e2e
+
+
+  secret-scan:
+    name: Secret scan (full history)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Official gitleaks release, verified against the published SHA-256 before it runs.
+      - name: Install gitleaks 8.30.1
+        run: |
+          curl -sSfL -o gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz" | sha256sum --check
+          tar -xzf gitleaks.tar.gz gitleaks
+      # Every commit of every fetched branch. Known test fixtures are listed by exact finding
+      # fingerprint in .gitleaksignore, so a new secret in any file still fails the job.
+      - name: Scan
+        run: ./gitleaks git . --log-opts="--all" --redact --no-banner --exit-code 1
