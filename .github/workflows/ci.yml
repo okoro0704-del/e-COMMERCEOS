@@ -1,0 +1,147 @@
+name: CI
+
+# Verification only: nothing here deploys, and no job holds production credentials. This is the
+# security release candidate's CI, based on production main: SQLite e2e (production's tests have no
+# PostgreSQL harness), a runtime smoke of the production start command on PostgreSQL, and the
+# full-history secret scan. Node comes from package.json `engines.node`, pinned to production's runtime.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Every outbound base URL points at a reserved name that never resolves (RFC 6761), so no test
+  # can reach a production service, even through a default (DIGIPEDIA_URL defaults to production).
+  DIGIPEDIA_URL: https://digipedia.ci.invalid
+  PORTAL_API_URL: https://portal.ci.invalid
+  TRUSTID_API_URL: https://trustid.ci.invalid
+  ELFCOM_URL: https://elfcom.ci.invalid
+  SOVEREIGN_DRIVE_URL: https://drive.ci.invalid
+  PLATFORM_JOBS_URL: https://jobs.ci.invalid
+  MASTER_DISTRIBUTOR_URL: https://distributor.ci.invalid
+  FUNDZMAN_URL: https://fundzman.ci.invalid
+  LOGISTICS_OS_URL: https://logistics.ci.invalid
+  PRIMITIVES_MODE: local
+  LOGISTICS_MODE: local
+
+jobs:
+  sqlite:
+    name: Build, typecheck, e2e (SQLite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: package.json
+          cache: npm
+      - name: Node is the pinned runtime
+        run: test "$(node --version)" = "v$(node -p 'require("./package.json").engines.node')"
+      - name: Install
+        run: npm ci
+      # The build generates the Prisma client; typecheck and tests need it.
+      - name: Build
+        run: npm run build
+      - name: Typecheck
+        run: npm run typecheck
+      - name: e2e (SQLite)
+        run: npm run test:e2e
+
+  runtime-smoke:
+    name: Runtime smoke (production start command, PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      # Production's database major. Throwaway, local to this job, no password.
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: smoke
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      ECO_ENV: production
+      DATABASE_URL: postgresql://postgres@127.0.0.1:5432/smoke
+      PORT: "8900"
+      CORS_ORIGINS: https://storefront.ci.invalid
+      SMOKE_API: http://127.0.0.1:8900
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: package.json
+          cache: npm
+      - name: Node is the pinned runtime
+        run: test "$(node --version)" = "v$(node -p 'require("./package.json").engines.node')"
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      # Values that exist only for this job; none is a real credential.
+      - name: Per-run secrets
+        run: |
+          for name in SESSION_SECRET INTERNAL_PROVISION_TOKEN; do
+            value="$(openssl rand -hex 32)"
+            echo "::add-mask::$value"
+            echo "$name=$value" >> "$GITHUB_ENV"
+          done
+      # pg_dump 18 writes a random \restrict key per dump, so those lines are left out of the comparison.
+      - name: First boot on an empty database (creates the schema), seed, check
+        run: |
+          npm run start:api > boot-1.log 2>&1 &
+          node tests/smoke/runtime-smoke.mjs wait
+          grep -q "now in sync" boot-1.log
+          node tests/smoke/runtime-smoke.mjs seed
+          node tests/smoke/runtime-smoke.mjs check first-boot
+          docker exec ${{ job.services.postgres.id }} pg_dump -U postgres --schema-only smoke | grep -v '^\\\(un\)\?restrict ' | sha256sum > schema-1.sha
+          pkill -f "node dist/index.js"
+          for i in $(seq 30); do pgrep -f "node dist/index.js" > /dev/null || break; sleep 1; done
+      - name: Restart on the populated database (no schema change), check
+        run: |
+          npm run start:api > boot-2.log 2>&1 &
+          node tests/smoke/runtime-smoke.mjs wait
+          grep -q "already in sync" boot-2.log
+          docker exec ${{ job.services.postgres.id }} pg_dump -U postgres --schema-only smoke | grep -v '^\\\(un\)\?restrict ' | sha256sum | diff - schema-1.sha
+          node tests/smoke/runtime-smoke.mjs check restart
+          pkill -f "node dist/index.js"
+      - name: Server output
+        if: always()
+        run: cat boot-1.log boot-2.log 2>/dev/null || true
+
+
+  secret-scan:
+    name: Secret scan (full history)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Official gitleaks release, verified against the published SHA-256 before it runs.
+      - name: Install gitleaks 8.30.1
+        run: |
+          curl -sSfL -o gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz" | sha256sum --check
+          tar -xzf gitleaks.tar.gz gitleaks
+      # Every commit of every fetched branch. Known test fixtures are listed by exact finding
+      # fingerprint in .gitleaksignore, so a new secret in any file still fails the job.
+      - name: Scan
+        run: ./gitleaks git . --log-opts="--all" --redact --no-banner --exit-code 1
