@@ -620,7 +620,7 @@ test("a business bind commits only with its audit row: if the audit cannot be wr
   const postgres = String(process.env.DATABASE_URL).startsWith("postgres");
   // Make audit inserts for binds fail, as if the audit store were unavailable.
   if (postgres) {
-    await prisma.$executeRawUnsafe(`CREATE OR REPLACE FUNCTION e2e_fail_bind_audit() RETURNS trigger AS $ BEGIN RAISE EXCEPTION 'audit unavailable'; END; $ LANGUAGE plpgsql`);
+    await prisma.$executeRawUnsafe(`CREATE OR REPLACE FUNCTION e2e_fail_bind_audit() RETURNS trigger AS $fn$ BEGIN RAISE EXCEPTION 'audit unavailable'; END; $fn$ LANGUAGE plpgsql`);
     await prisma.$executeRawUnsafe(`CREATE TRIGGER e2e_fail_bind_audit BEFORE INSERT ON "AuditLog" FOR EACH ROW WHEN (NEW.action = 'portal.business_bound') EXECUTE FUNCTION e2e_fail_bind_audit()`);
   } else {
     await prisma.$executeRawUnsafe(`CREATE TRIGGER e2e_fail_bind_audit BEFORE INSERT ON "AuditLog" WHEN NEW.action = 'portal.business_bound' BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END`);
