@@ -27,10 +27,12 @@ const dbFile = `owner-auth-hotfix-${process.pid}.db`;
 const testDbPath = path.join(apiRoot, "prisma", dbFile);
 
 // A synthetic "leaked default". Only its hash is given to the app; the preimage stays in this test.
-const LEAKED_DEFAULT = "synthetic-leaked-owner-default-0000";
+const LEAKED_DEFAULT = "synthetic-leaked-default-value-0000";
 const LEAKED_SHA256 = createHash("sha256").update(LEAKED_DEFAULT).digest("hex");
-const STRONG = "Owner-Chosen-Str0ng-PW";
-const STRONG_2 = "Owner-Second-Str0ng-PW";
+// Policy rejects a password that contains the email's local-part, so these must not contain the
+// local-parts used below ("boss", "chef", "host").
+const STRONG = "Str0ng-Access-Code-11";
+const STRONG_2 = "Second-Access-Code-22";
 
 process.env.NODE_ENV = "test";
 process.env.DATABASE_URL = `file:./${dbFile}`;
@@ -108,7 +110,7 @@ test("sign-in requires the store handle (email alone is refused)", async () => {
   resetThrottles();
   const stamp = Date.now().toString(36);
   const sub = `ha-${stamp}`;
-  const email = `owner@${sub}.example`;
+  const email = `boss@${sub}.example`;
   assert.equal((await provision({ subdomain: sub, email, password: STRONG })).statusCode, 201);
 
   const noHandle = await login({ email, password: STRONG });
@@ -127,7 +129,7 @@ test("a known default password cannot authenticate, and is not even looked up", 
   resetThrottles();
   const stamp = Date.now().toString(36);
   const sub = `def-${stamp}`;
-  const email = `owner@${sub}.example`;
+  const email = `boss@${sub}.example`;
   // Provision with a strong password; the owner is real, but the leaked default must still be refused.
   assert.equal((await provision({ subdomain: sub, email, password: STRONG })).statusCode, 201);
 
@@ -139,7 +141,7 @@ test("a known default password cannot authenticate, and is not even looked up", 
 test("cross-store: the same owner email in two stores stays scoped to its own store", async () => {
   resetThrottles();
   const stamp = Date.now().toString(36);
-  const email = `owner@shared-${stamp}.example`;
+  const email = `boss@shared-${stamp}.example`;
   const subA = `xa-${stamp}`;
   const subB = `xb-${stamp}`;
   assert.equal((await provision({ subdomain: subA, email, password: STRONG })).statusCode, 201);
@@ -162,7 +164,7 @@ test("provisioning cannot store a compromised password (account left without one
   resetThrottles();
   const stamp = Date.now().toString(36);
   const sub = `prov-${stamp}`;
-  const email = `owner@${sub}.example`;
+  const email = `boss@${sub}.example`;
   const res = await provision({ subdomain: sub, email, password: LEAKED_DEFAULT });
   assert.equal(res.statusCode, 201, res.body);
   assert.equal(res.json().temporaryAdminPassword, undefined, "no usable password is returned or stored");
@@ -175,18 +177,16 @@ test("provisioning cannot store a compromised password (account left without one
 test("failed sign-ins are throttled per account, without locking out other accounts", async () => {
   resetThrottles();
   const stamp = Date.now().toString(36);
-  const sub = `thr-${stamp}`;
-  const victim = `owner@${sub}.example`;
-  const other = `other@${sub}.example`;
-  assert.equal((await provision({ subdomain: sub, email: victim, password: STRONG })).statusCode, 201);
-  assert.equal(
-    (await provision({ subdomain: sub, email: other, password: STRONG_2 })).statusCode,
-    201,
-  );
+  const subV = `thrv-${stamp}`;
+  const subO = `thro-${stamp}`;
+  const victim = `boss@${subV}.example`;
+  const other = `chef@${subO}.example`;
+  assert.equal((await provision({ subdomain: subV, email: victim, password: STRONG })).statusCode, 201);
+  assert.equal((await provision({ subdomain: subO, email: other, password: STRONG_2 })).statusCode, 201);
 
   let sawThrottle = false;
   for (let i = 0; i < 12; i += 1) {
-    const r = await login({ email: victim, password: "wrong-but-not-leaked", tenantSlug: sub });
+    const r = await login({ email: victim, password: "wrong-but-not-leaked", tenantSlug: subV });
     if (r.statusCode === 429) {
       sawThrottle = true;
       assert.equal(r.json().error, "too_many_attempts");
@@ -196,20 +196,20 @@ test("failed sign-ins are throttled per account, without locking out other accou
   }
   assert.ok(sawThrottle, "the account should be throttled after repeated failures");
 
-  // A different account in the same store is unaffected (per-account key, not per-IP lockout).
-  const otherOk = await login({ email: other, password: STRONG_2, tenantSlug: sub });
+  // A different owner (different store) is unaffected: the throttle key is per account, not per IP.
+  const otherOk = await login({ email: other, password: STRONG_2, tenantSlug: subO });
   assert.equal(otherOk.statusCode, 200, otherOk.body);
 
   // The correct password still works once the throttle window is cleared (success also clears the key).
   resetThrottles();
-  assert.equal((await login({ email: victim, password: STRONG, tenantSlug: sub })).statusCode, 200);
+  assert.equal((await login({ email: victim, password: STRONG, tenantSlug: subV })).statusCode, 200);
 });
 
 test("password change and logout revoke other sessions", async () => {
   resetThrottles();
   const stamp = Date.now().toString(36);
   const sub = `rev-${stamp}`;
-  const email = `owner@${sub}.example`;
+  const email = `boss@${sub}.example`;
   assert.equal((await provision({ subdomain: sub, email, password: STRONG })).statusCode, 201);
 
   const first = (await login({ email, password: STRONG, tenantSlug: sub })).json().token as string;
@@ -243,7 +243,7 @@ test("owner flow 1 — self-set password: full access immediately", async () => 
   resetThrottles();
   const stamp = Date.now().toString(36);
   const sub = `f1-${stamp}`;
-  const email = `owner@${sub}.example`;
+  const email = `boss@${sub}.example`;
   assert.equal((await provision({ subdomain: sub, email, password: STRONG })).statusCode, 201);
   const res = await login({ email, password: STRONG, tenantSlug: sub });
   assert.equal(res.statusCode, 200, res.body);
@@ -257,7 +257,7 @@ test("owner flow 2 — operator temporary password: must change before normal ac
   resetThrottles();
   const stamp = Date.now().toString(36);
   const sub = `f2-${stamp}`;
-  const email = `owner@${sub}.example`;
+  const email = `boss@${sub}.example`;
   // An operator issues a temporary password (temporaryPassword:true).
   assert.equal((await provision({ subdomain: sub, email, password: STRONG, temporaryPassword: true })).statusCode, 201);
 
@@ -289,7 +289,7 @@ test("owner flow 3 — no usable password: a compromised default leaves recovery
   resetThrottles();
   const stamp = Date.now().toString(36);
   const sub = `f3-${stamp}`;
-  const email = `owner@${sub}.example`;
+  const email = `boss@${sub}.example`;
   assert.equal((await provision({ subdomain: sub, email, password: LEAKED_DEFAULT })).statusCode, 201);
   // No password authenticates this owner; recovery (operator reset / Portal handoff) is required.
   assert.equal((await login({ email, password: LEAKED_DEFAULT, tenantSlug: sub })).statusCode, 401);
