@@ -22,7 +22,7 @@ process.env.LOGISTICS_MODE = "local";
 process.env.ECO_SKIP_PRODUCTION_ASSERT = "true";
 
 const BUYER_TOKEN = "TD-BUYER-1";
-const MERCHANT_PASSWORD = "Password123!";
+const MERCHANT_PASSWORD = "Fixture-Str0ng-Pw-7";
 
 let app: FastifyInstance;
 let prisma: PrismaClient;

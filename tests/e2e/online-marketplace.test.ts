@@ -23,7 +23,7 @@ process.env.PRIMITIVES_MODE = "local";
 process.env.LOGISTICS_MODE = "local";
 process.env.ECO_SKIP_PRODUCTION_ASSERT = "true";
 
-const OPERATOR_PASSWORD = "Password123!";
+const OPERATOR_PASSWORD = "Fixture-Str0ng-Pw-7";
 
 let app: FastifyInstance;
 let prisma: PrismaClient;

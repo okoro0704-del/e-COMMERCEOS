@@ -22,7 +22,7 @@ process.env.LOGISTICS_MODE = "local";
 process.env.ECO_SKIP_PRODUCTION_ASSERT = "true";
 process.env.ECOMMERCEOS_PUBLIC_API_URL = "https://api.example.test";
 
-const PASSWORD = "Password123!";
+const PASSWORD = "Fixture-Str0ng-Pw-7";
 
 let app: FastifyInstance;
 let prisma: PrismaClient;
