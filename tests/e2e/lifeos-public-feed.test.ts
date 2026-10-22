@@ -81,10 +81,12 @@ async function provision(input: {
 }
 
 async function login(email: string) {
+  // Sign-in is store-scoped; these owners use owner@<subdomain>.example.
+  const tenantSlug = email.split("@")[1]?.replace(/\.example$/, "");
   const res = await app.inject({
     method: "POST",
     url: "/v1/auth/merchant/login",
-    payload: { email, password: PASSWORD },
+    payload: { email, password: PASSWORD, tenantSlug },
   });
   assert.equal(res.statusCode, 200, res.body);
   return (res.json() as { token: string }).token;

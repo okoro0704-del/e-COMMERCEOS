@@ -8,10 +8,22 @@ export function generateSessionToken(): string {
   return `eco_${randomBytes(32).toString("base64url")}`;
 }
 
-export function hashPassword(password: string): string {
+/** Stored instead of a hash when an account has no password yet; it can never verify. */
+export const UNUSABLE_PASSWORD_HASH = "!unset";
+
+/** A ":temp" suffix marks a password someone else chose; it must be replaced at first sign-in. */
+export function hashPassword(password: string, opts: { temporary?: boolean } = {}): string {
   const salt = randomBytes(16).toString("hex");
   const hash = scryptSync(password, salt, 64).toString("hex");
-  return `${salt}:${hash}`;
+  return opts.temporary ? `${salt}:${hash}:temp` : `${salt}:${hash}`;
+}
+
+export function isTemporaryPasswordHash(stored: string): boolean {
+  return stored.endsWith(":temp");
+}
+
+export function isPasswordSet(stored: string): boolean {
+  return stored !== UNUSABLE_PASSWORD_HASH;
 }
 
 export function verifyPassword(password: string, stored: string): boolean {

@@ -2,7 +2,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { ECOMMERCEOS_MANIFEST, ecommerceVerticalPreset } from "@ecommerceos/shared";
 import { prisma } from "../../db.js";
 import { config } from "../../config.js";
-import { hashPassword, httpError } from "../../lib/crypto.js";
+import { hashPassword, httpError, UNUSABLE_PASSWORD_HASH } from "../../lib/crypto.js";
+import { passwordProblem } from "../../lib/password-policy.js";
 import { writeAudit } from "../../lib/audit.js";
 import { seedStoreDefaults } from "./provision-seed.js";
 import { getDistributorProvider, getLifeOsPrimitives } from "../lifeos/container.js";
@@ -19,7 +20,16 @@ export type ProvisionTenantInput = {
   modules?: string[];
   seed?: "default" | "none";
   trustId?: { audience?: string; businessPublicId?: string };
-  adminStaff?: { email: string; displayName: string; role?: string; password?: string };
+  adminStaff?: {
+    email: string;
+    displayName: string;
+    role?: string;
+    password?: string;
+    /** The password was chosen by someone other than the owner; it must be replaced at first sign-in. */
+    temporaryPassword?: boolean;
+  };
+  /** Stable identity of the store owner in the calling platform (LifeOS Portal subject or Trust ID). */
+  owner?: { subject: string };
   organization?: { slug?: string; name?: string };
   manifestVersion?: string;
   pickup?: {
@@ -54,6 +64,9 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
 
   const existing = await prisma.tenant.findUnique({ where: { slug } });
   if (existing) {
+    // A retry by the same owner returns the store it already created; anyone else gets a conflict.
+    const replay = input.owner?.subject ? await replayForOwner(existing.id, input.owner.subject) : null;
+    if (replay) return replay;
     throw httpError(409, "conflict", `Tenant slug already exists: ${slug}`);
   }
 
@@ -127,15 +140,16 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
     });
   }
 
-  const adminEmail = input.adminStaff?.email ?? `owner@${slug}.commerce.local`;
-  const adminPassword = input.adminStaff?.password ?? `Tmp-${randomBytes(6).toString("hex")}!`;
+  const adminEmail = (input.adminStaff?.email ?? `owner@${slug}.commerce.local`).trim().toLowerCase();
+  const credentials = ownerCredentials(input, adminEmail);
   const staff = await prisma.staffMember.create({
     data: {
       tenantId: tenant.id,
       displayName: input.adminStaff?.displayName ?? "Owner",
       email: adminEmail,
-      passwordHash: hashPassword(adminPassword),
+      passwordHash: credentials.passwordHash,
       role: input.adminStaff?.role ?? "owner",
+      trustId: input.owner?.subject ?? null,
       status: "active",
     },
   });
@@ -163,6 +177,8 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
       slug,
       modules,
       seed: seedMode,
+      credentialSetup: credentials.setup,
+      ownerBound: Boolean(input.owner?.subject),
       fingerprint: createHash("sha256").update(`${slug}:${tenant.id}`).digest("hex").slice(0, 16),
     },
   });
@@ -181,12 +197,77 @@ export async function provisionEcommerceTenant(input: ProvisionTenantInput) {
     modulesEnabled: modules,
     seedApplied: seedMode === "default",
     primitiveBindings,
-    temporaryAdminPassword: input.adminStaff?.password ? undefined : adminPassword,
+    credentialSetup: credentials.setup,
+    temporaryAdminPassword: credentials.temporaryPassword,
     launchUrls: {
       storefront: storefrontUrl,
       admin: adminConsoleUrl,
     },
     verticalId: preset.id,
     operatingModel: preset.operatingModel,
+  };
+}
+
+type CredentialSetup = "password" | "temporary_password" | "portal_handoff";
+
+/**
+ * How the owner will first sign in. A supplied password is used only if it passes policy
+ * (publicly known defaults never do). With an owner identity and no usable password the
+ * account has no password until the owner sets one through a Portal handoff.
+ */
+function ownerCredentials(
+  input: ProvisionTenantInput,
+  adminEmail: string,
+): { passwordHash: string; setup: CredentialSetup; temporaryPassword?: string } {
+  const supplied = input.adminStaff?.password;
+  if (supplied && !passwordProblem(supplied, adminEmail)) {
+    const temporary = input.adminStaff?.temporaryPassword === true;
+    return {
+      passwordHash: hashPassword(supplied, { temporary }),
+      setup: temporary ? "temporary_password" : "password",
+    };
+  }
+  if (supplied || input.owner?.subject) {
+    return { passwordHash: UNUSABLE_PASSWORD_HASH, setup: "portal_handoff" };
+  }
+  const generated = `Tmp-${randomBytes(6).toString("hex")}!`;
+  return {
+    passwordHash: hashPassword(generated, { temporary: true }),
+    setup: "temporary_password",
+    temporaryPassword: generated,
+  };
+}
+
+async function replayForOwner(tenantId: string, ownerSubject: string) {
+  const owner = await prisma.staffMember.findFirst({ where: { tenantId, role: "owner", trustId: ownerSubject } });
+  if (!owner) return null;
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    include: { storeConfig: true, modules: { where: { enabled: true } } },
+  });
+  if (!tenant) return null;
+  const settings =
+    tenant.settings && typeof tenant.settings === "object" && !Array.isArray(tenant.settings)
+      ? (tenant.settings as Record<string, unknown>)
+      : {};
+  const storefrontUrl = launchUrl(config.storefrontLaunchUrlTemplate, tenant.slug);
+  const adminConsoleUrl = launchUrl(config.adminLaunchUrlTemplate, tenant.slug);
+  return {
+    ok: true as const,
+    replayed: true as const,
+    tenantId: tenant.id,
+    storefrontUrl,
+    adminConsoleUrl,
+    organizationId: tenant.organizationId,
+    staffId: owner.id,
+    slug: tenant.slug,
+    modulesEnabled: tenant.modules.map((m) => m.moduleId),
+    seedApplied: Boolean(tenant.storeConfig),
+    primitiveBindings: settings.primitiveBindings,
+    credentialSetup: undefined,
+    temporaryAdminPassword: undefined,
+    launchUrls: { storefront: storefrontUrl, admin: adminConsoleUrl },
+    verticalId: typeof settings.verticalId === "string" ? settings.verticalId : tenant.businessType,
+    operatingModel: typeof settings.operatingModel === "string" ? settings.operatingModel : "store",
   };
 }

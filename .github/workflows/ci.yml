@@ -1,0 +1,62 @@
+name: CI (P0 owner-auth hotfix)
+
+# Verification only; nothing here deploys and no job holds production credentials. This branch is the
+# emergency owner-authentication hotfix on production main (f06227c). It runs build, typecheck and the
+# owner-auth acceptance plus the existing e2e tests that are compatible without joint-candidate changes.
+# online-marketplace is intentionally omitted: its updated form exercises marketplace role-gating that
+# belongs to the joint candidate (397fef7), not this security-only hotfix.
+on:
+  pull_request:
+  push:
+    branches: [security/p0-owner-auth-hotfix]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-p0-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Every outbound base URL points at a reserved name that never resolves (RFC 6761).
+  DIGIPEDIA_URL: https://digipedia.ci.invalid
+  PORTAL_API_URL: https://portal.ci.invalid
+  TRUSTID_API_URL: https://trustid.ci.invalid
+  ELFCOM_URL: https://elfcom.ci.invalid
+  SOVEREIGN_DRIVE_URL: https://drive.ci.invalid
+  PLATFORM_JOBS_URL: https://jobs.ci.invalid
+  MASTER_DISTRIBUTOR_URL: https://distributor.ci.invalid
+  FUNDZMAN_URL: https://fundzman.ci.invalid
+  LOGISTICS_OS_URL: https://logistics.ci.invalid
+  PRIMITIVES_MODE: local
+  LOGISTICS_MODE: local
+
+jobs:
+  sqlite:
+    name: Build, typecheck, e2e (SQLite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Typecheck
+        run: npm run typecheck
+      # Each e2e file runs in its own process: every file sets DATABASE_URL at import, so they cannot
+      # share a process (this mirrors the repository's own test:e2e script).
+      - name: e2e (owner-auth hotfix)
+        run: node --import tsx --test --test-concurrency=1 tests/e2e/owner-auth-hotfix.test.ts
+      - name: e2e (provisioning, orders, feed, digipedia)
+        run: |
+          node --import tsx --test --test-concurrency=1 tests/e2e/portal-provisioning.test.ts
+          node --import tsx --test --test-concurrency=1 tests/e2e/order-lifecycle.test.ts
+          node --import tsx --test --test-concurrency=1 tests/e2e/lifeos-public-feed.test.ts
+          node --import tsx --test --test-concurrency=1 tests/e2e/digipedia-client.test.ts
